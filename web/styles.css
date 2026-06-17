@@ -436,6 +436,54 @@ main {
 }
 .tag.weather { color: var(--violet); border-color: rgba(180,140,224,.45); }
 
+/* --- conversation memory + intent panel ---------------------------------- */
+.console-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.console-top .console-label { margin-bottom: 0; }
+.ghost-btn {
+  cursor: pointer; font-family: var(--mono); font-size: 12px; color: var(--muted);
+  background: rgba(255,255,255,0.03); border: 1px solid var(--line-2);
+  border-radius: 8px; padding: 7px 13px; transition: all .18s;
+}
+.ghost-btn:hover { color: var(--cream); border-color: var(--amber); background: rgba(231,177,90,0.08); }
+
+.memory-panel { animation: rise .5s ease both; }
+.memory-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; }
+@media (max-width: 760px) { .memory-grid { grid-template-columns: 1fr; } }
+.mem-col h3 {
+  font-family: var(--serif); font-size: 14px; font-weight: 600; color: var(--cream);
+  margin: 14px 0 9px; display: flex; align-items: center; gap: 8px;
+}
+.mem-col h3:first-child { margin-top: 0; }
+.mem-tag {
+  font-family: var(--mono); font-size: 9.5px; text-transform: uppercase; letter-spacing: .6px;
+  color: var(--faint); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; font-weight: 400;
+}
+.mem-goal {
+  margin: 0; font-family: var(--serif); font-style: italic; font-size: 15.5px;
+  color: var(--amber-soft); line-height: 1.4;
+}
+.mem-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.mem-chip {
+  font-size: 12.5px; color: var(--cream); background: rgba(92,200,189,0.08);
+  border: 1px solid rgba(92,200,189,0.3); border-radius: 999px; padding: 5px 12px;
+}
+.mem-chip.pref { background: rgba(231,177,90,0.08); border-color: rgba(231,177,90,0.32); color: var(--amber-soft); }
+.mem-chip .mem-k { color: var(--faint); font-family: var(--mono); font-size: 10.5px; margin-right: 5px; }
+.mem-empty { color: var(--faint); font-style: italic; font-size: 13px; }
+.mem-turns { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+.mem-turns li { margin: 5px 0; line-height: 1.4; }
+.mem-turns li::marker { color: var(--amber); font-family: var(--mono); font-size: 11px; }
+
+/* a node whose result was reused from cache (not re-run this turn) */
+.node.is-cached { border-color: rgba(180,140,224,0.4); opacity: 0.85; }
+.node.is-cached .pip { background: var(--violet); }
+.rcard.cached .rcard-state .pip { background: var(--violet); }
+.rcard.cached .rcard-state { color: var(--violet); }
+
+/* discovered-agent card: role + motivation line */
+.acard .role-line { font-size: 12px; color: var(--amber-soft); }
+.acard .role-line .motiv { color: var(--muted); font-style: italic; }
+
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.001s !important; animation-iteration-count: 1 !important; }
 }

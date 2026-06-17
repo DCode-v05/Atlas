@@ -194,8 +194,10 @@ simplified where the details would distract a beginner.
 - **No authentication.** The spec supports API keys, OAuth, etc. via the Agent
   Card's `securitySchemes`. We run on localhost and skip it. *Never expose an
   unauthenticated agent to the internet.*
-- **No multi‑turn `input-required`.** Real agents can pause a task to ask you a
-  question; ours answer in one shot.
+- **Multi‑turn conversations ARE supported** (built on the `contextId` + a memory
+  layer — see [MEMORY_AND_INTENT.md](MEMORY_AND_INTENT.md)). What we *don't*
+  implement is the in‑task **`input-required`** pause, where an agent stops
+  mid‑task to ask *you* a question; our agents answer in one shot.
 - **No push notifications / webhooks** (the spec's way to be told about long jobs).
 - **One text part per message.** A2A also supports file and structured‑data parts.
 - We **implement the protocol by hand** in [`common/a2a.py`](../common/a2a.py)

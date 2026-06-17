@@ -35,9 +35,13 @@ _groq_client = None  # created lazily on first real call
 def using_real_llm() -> bool:
     """True when a *real-looking* Groq API key is configured.
 
-    We ignore blanks and the placeholder values shipped in .env.example so that
+    Set `ATLAS_FORCE_MOCK=1` to force offline mock mode without touching your
+    `.env` (safe on Windows, where blanking an env var is finicky). We also
+    ignore blanks and the placeholder values shipped in .env.example so that
     copying the example file verbatim still falls back to the offline mock
     instead of firing failing API calls. Real Groq keys start with "gsk_"."""
+    if os.environ.get("ATLAS_FORCE_MOCK", "").strip().lower() in ("1", "true", "yes"):
+        return False
     key = os.environ.get("GROQ_API_KEY", "").strip()
     if not key:
         return False
@@ -93,6 +97,12 @@ async def chat(system: str, user: str, *, tag: str = "",
         return await asyncio.to_thread(_call)
     except Exception as exc:  # surface a clear, friendly error upstream
         raise RuntimeError(f"Groq call failed ({type(exc).__name__}): {exc}") from exc
+
+
+def heuristic_fields(text: str) -> dict:
+    """Public access to the offline heuristic request parser — used by the
+    orchestrator's mock 'understand' step when there's no Groq key."""
+    return _guess_request(text)
 
 
 def extract_json(text: str) -> dict:

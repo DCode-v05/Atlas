@@ -22,28 +22,48 @@ GATEWAY_PORT = 8000
 # `key`    -> short id used internally + in the UI
 # `module` -> python module the launcher runs with `python -m <module>`
 # `port`   -> TCP port the agent's HTTP server listens on
+# Each specialist also declares its ROLE and MOTIVATION (why it exists) and the
+# INTENT the orchestrator attaches when delegating to it (the FIPA "request"
+# performative's reason). This is the explicit "roles & motivations" layer.
 SPECIALISTS: list[dict] = [
     {
         "key": "destination",
         "module": "agents.destination_expert",
         "port": 8101,
+        "role": "Destination scout",
+        "motivation": "Help the traveler understand the place and its culture",
+        "intent": "Understand the destination, best time to go, and etiquette",
     },
     {
         "key": "itinerary",
         "module": "agents.itinerary_planner",
         "port": 8102,
+        "role": "Itinerary planner",
+        "motivation": "Make every day enjoyable and well-paced",
+        "intent": "Plan a day-by-day itinerary matched to the interests",
     },
     {
         "key": "budget",
         "module": "agents.budget_packing",
         "port": 8103,
+        "role": "Fiscal advisor",
+        "motivation": "Keep the trip affordable and the costs transparent",
+        "intent": "Estimate costs and keep the trip on budget",
     },
     {
         "key": "weather",
         "module": "agents.weather_advisor",
         "port": 8104,
+        "role": "Weather & packing advisor",
+        "motivation": "Make sure the traveler packs right for real conditions",
+        "intent": "Ground packing advice in a live weather forecast",
     },
 ]
+
+
+def specialist(key: str) -> dict:
+    """Look up a specialist's config entry by key."""
+    return next(s for s in SPECIALISTS if s["key"] == key)
 
 # The orchestrator is ALSO exposed as a standalone A2A agent (so it can be
 # "hired" like any other agent — this is what demonstrates agents composing).

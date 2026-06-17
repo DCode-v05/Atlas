@@ -38,6 +38,10 @@ const nodeEls = {};           // id -> element
 const edgeEls = {};           // id -> {g, base, flow, packet}
 const responseCards = {};     // key -> element
 
+let CONTEXT_ID = null;         // the A2A contextId that identifies this conversation
+let PREFERENCES = [];          // remembered user preferences (persist across trips)
+let TURNS = [];                // [{request}] in this conversation
+
 const $ = (sel) => document.querySelector(sel);
 
 /* ----------------------------------------------------------------- helpers */
@@ -235,6 +239,7 @@ function renderAgentCard(a, isHost) {
        <span class="dot ${a.online ? "" : "off"}" title="${a.online ? "online" : "offline"}"></span>
      </div>
      <p>${escapeHtml(c.description || "(offline)")}</p>
+     ${a.role ? `<div class="role-line">${escapeHtml(a.role)} — <span class="motiv">${escapeHtml(a.motivation || "")}</span></div>` : ""}
      <div class="skills">${skills}</div>
      <div class="url">${escapeHtml(a.url)}</div>
      <button class="view-json">▸ agent-card.json</button>
@@ -273,6 +278,83 @@ async function loadAgents() {
     wrap.innerHTML = `<p class="hint">Could not reach the gateway. Are the
       agents running? (start everything with <code>python launch.py</code>)</p>`;
   }
+}
+
+/* =================================================== CONVERSATION MEMORY UI */
+function setContextId(id) {
+  CONTEXT_ID = id || null;
+  try { if (id) localStorage.setItem("atlasContextId", id); } catch {}
+}
+function showMemoryPanel() { $("#memory-panel").hidden = false; $("#new-trip").hidden = false; }
+
+function renderGoal(intent) {
+  if (intent && intent.goal) { $("#mem-goal").textContent = intent.goal; showMemoryPanel(); }
+}
+function renderBeliefs(b) {
+  if (!b) return;
+  const chips = [];
+  if (b.destination) chips.push(["dest", b.destination]);
+  if (b.days) chips.push(["days", b.days + " days"]);
+  if (b.travelStyle) chips.push(["style", b.travelStyle]);
+  (b.interests || []).forEach((i) => chips.push(["", i]));
+  $("#mem-beliefs").innerHTML = chips.map(([k, v]) =>
+    `<span class="mem-chip">${k ? `<span class="mem-k">${k}</span>` : ""}${escapeHtml(String(v))}</span>`).join("");
+  if (b.destination) $("#bp-route").textContent = String(b.destination).toUpperCase();
+  showMemoryPanel();
+}
+function renderPrefs(prefs) {
+  PREFERENCES = prefs || [];
+  const box = $("#mem-prefs");
+  box.innerHTML = PREFERENCES.length
+    ? PREFERENCES.map((p) => `<span class="mem-chip pref">${escapeHtml(p)}</span>`).join("")
+    : '<span class="mem-empty">nothing yet</span>';
+  if (PREFERENCES.length) showMemoryPanel();
+}
+function addPrefs(facts) {
+  const set = new Set(PREFERENCES);
+  (facts || []).forEach((f) => set.add(f));
+  renderPrefs([...set]);
+}
+function renderTurns(turns) {
+  TURNS = turns || [];
+  $("#mem-turns").innerHTML = TURNS.map((t) => `<li>${escapeHtml(t.request)}</li>`).join("");
+  if (TURNS.length) showMemoryPanel();
+}
+
+async function loadConversation() {
+  let cid = null;
+  try { cid = localStorage.getItem("atlasContextId"); } catch {}
+  try {
+    const data = await (await fetch("/api/conversation?contextId=" + encodeURIComponent(cid || ""))).json();
+    renderPrefs(data.preferences);          // show remembered prefs even before any trip
+    if (cid && data.exists) {
+      setContextId(cid);
+      renderBeliefs(data.beliefs);
+      renderGoal(data.intent);
+      renderTurns(data.turns);
+      if (data.lastPlan) {
+        $("#final-body").innerHTML = mdToHtml(data.lastPlan);
+        $("#final").hidden = false;
+      }
+    }
+  } catch { /* gateway not up yet — ignore */ }
+}
+
+async function newTrip() {
+  try {
+    const r = await (await fetch("/api/reset", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contextId: CONTEXT_ID }),
+    })).json();
+    setContextId(r.contextId);
+  } catch { setContextId(null); }
+  TURNS = []; renderTurns([]);
+  $("#mem-goal").textContent = "—"; $("#mem-beliefs").innerHTML = "";
+  resetRun();
+  $("#final").hidden = true;
+  $("#log").innerHTML = '<div class="log-empty">New trip — your remembered preferences are kept. Send a request.</div>';
+  $("#request").value = ""; $("#request").focus();
+  renderPrefs(PREFERENCES);                 // preferences persist across trips
 }
 
 /* ============================================================ RESPONSE CARDS */
@@ -320,28 +402,65 @@ function tagClassFor(key) {
 function handleEvent(ev) {
   switch (ev.type) {
     case "start":
+      if (ev.contextId) setContextId(ev.contextId);
+      $("#new-trip").hidden = false;
+      TURNS.push({ request: ev.request }); renderTurns(TURNS);
       logRow({ tag: "client", tagClass: "sys",
         msg: `Sent request to host agent: <span class="k">${escapeHtml(ev.request)}</span>` });
-      setNode("host", "working", "parsing");
+      setNode("host", "working", "thinking");
       setEdge("you", true, "amber");
       break;
 
-    case "parsed": {
-      const p = ev.parsed;
-      $("#bp-route").textContent = (p.destination || "your trip").toUpperCase();
+    case "recall":
+      renderPrefs(ev.preferences);
+      if (!ev.isFirst) logRow({ tag: "host", tagClass: "host",
+        msg: `Recalled this conversation (turn ${ev.turnCount + 1})${ev.preferences && ev.preferences.length ? ` &middot; ${ev.preferences.length} remembered preference(s)` : ""}` });
+      break;
+
+    case "understood":
+      renderBeliefs(ev.beliefs);
+      renderGoal(ev.intent);
       logRow({ tag: "host", tagClass: "host",
-        msg: `Understood request &rarr; <span class="k">${escapeHtml(p.destination)}</span>, ${p.days} days, ${escapeHtml((p.interests||[]).join(", "))}, ${escapeHtml(p.travelStyle)}`,
-        json: p });
+        msg: `Updated beliefs &rarr; goal: <span class="k">${escapeHtml(ev.intent.goal)}</span>${ev.changed && ev.changed.length ? ` &middot; changed: ${escapeHtml(ev.changed.join(", "))}` : ""}`,
+        json: { beliefs: ev.beliefs, intent: ev.intent, changed: ev.changed } });
       setEdge("you", false);
       break;
-    }
+
+    case "memory_added":
+      addPrefs(ev.facts);
+      logRow({ tag: "memory", tagClass: "host",
+        msg: `Remembered for next time: <span class="k">${escapeHtml(ev.facts.join(", "))}</span>` });
+      break;
 
     case "discovered":
       logRow({ tag: "host", tagClass: "host",
         msg: `Discovered ${ev.agents.length} agents via their <span class="k">/.well-known/agent-card.json</span>`,
-        json: ev.agents.map((a) => ({ name: a.card.name, url: a.url,
+        json: ev.agents.map((a) => ({ name: a.card.name, role: a.role, url: a.url,
           skills: (a.card.skills || []).map((s) => s.id) })) });
       ev.agents.forEach((a) => setNode(a.key, "contacted", "ready"));
+      break;
+
+    case "selection":
+      logRow({ tag: "host", tagClass: "host",
+        msg: `Coordination &rarr; running <span class="k">${escapeHtml(ev.selected.join(", ") || "(none — all cached)")}</span>${ev.reused.length ? ` &middot; reusing cached: ${escapeHtml(ev.reused.join(", "))}` : ""}`,
+        json: { selected: ev.selected, reused: ev.reused, changed: ev.changed } });
+      break;
+
+    case "agent_reused": {
+      setNode(ev.agent, "cached", "reused");
+      setEdge(ev.agent, false);
+      const card = ensureResponseCard(ev.agent);
+      card.classList.remove("working"); card.classList.add("cached");
+      card.querySelector(".st").textContent = "cached";
+      if (ev.text) card.querySelector(".rcard-body").innerHTML = mdToHtml(ev.text);
+      logRow({ tag: ev.agent, tagClass: tagClassFor(ev.agent),
+        msg: "<em>unchanged this turn — reused cached result (no A2A call)</em>" });
+      break;
+    }
+
+    case "agent_retry":
+      logRow({ tag: ev.agent, tagClass: tagClassFor(ev.agent),
+        msg: `<span style="color:var(--amber-soft)">transient error — retrying (attempt ${ev.attempt})…</span>` });
       break;
 
     case "delegate":
@@ -349,7 +468,7 @@ function handleEvent(ev) {
       setEdge(ev.agent, true, "teal");
       ensureResponseCard(ev.agent);
       logRow({ tag: ev.agent, tagClass: tagClassFor(ev.agent),
-        msg: `Host &rarr; <strong>${escapeHtml(ev.agentName)}</strong> &nbsp; <span class="k">message/stream</span>: "${escapeHtml(ev.request)}"` });
+        msg: `Host &rarr; <strong>${escapeHtml(ev.agentName)}</strong> &nbsp; <span class="k">message/stream</span>${ev.intent ? ` &middot; <em>intent: ${escapeHtml(ev.intent)}</em>` : ""}` });
       break;
 
     case "a2a_event": {
@@ -447,7 +566,7 @@ async function runPlan(request) {
     const resp = await fetch("/api/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ request }),
+      body: JSON.stringify({ request, contextId: CONTEXT_ID || "" }),
     });
     if (!resp.ok || !resp.body) throw new Error("gateway error " + resp.status);
 
@@ -480,6 +599,7 @@ function init() {
   buildGraph();
   loadStatus();
   loadAgents();
+  loadConversation();   // restore a conversation from a previous visit + preferences
 
   const chips = $("#examples");
   EXAMPLES.forEach((ex) => {
@@ -488,6 +608,8 @@ function init() {
     c.addEventListener("click", () => { $("#request").value = ex; $("#request").focus(); });
     chips.appendChild(c);
   });
+
+  $("#new-trip").addEventListener("click", newTrip);
 
   $("#plan-form").addEventListener("submit", (e) => {
     e.preventDefault();

@@ -13,3 +13,6 @@ venv/
 Thumbs.db
 .idea/
 .vscode/
+
+# Persistent memory database
+data/

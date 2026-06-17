@@ -61,9 +61,29 @@ Hit **Plan my trip** and watch the network update together:
 5. Finally the **boarding‑pass trip plan** appears — the host's synthesis (its
    Weather section uses the *real* numbers the MCP tool returned).
 
-When it's finished, every node is green:
+When it's finished, every node is green, and the **Conversation Memory** panel
+now shows the goal, the beliefs, and what it remembered about you.
 
-![network done](images/ui-network-done.png)
+---
+
+## 2½. Ask a follow‑up (multi‑turn memory)
+
+Now type a follow‑up into the *same* box, e.g.:
+
+> *Make it budget and add 2 more days*
+
+Watch what happens — this is the memory/intent layer:
+
+![Conversation memory](images/ui-memory.png)
+
+- The **beliefs** update (days `5 → 7`, style `→ budget`) — it *remembered* Kyoto
+  and your interests instead of starting over.
+- The log shows **`Coordination → running … · reusing cached: …`**: only the
+  affected agents re‑run; the rest show **“reused (cached)”** in violet.
+- Anything durable it learned (e.g. *“enjoys food”*) lands under **Remembered
+  about you** and survives even a server restart.
+
+Hit **＋ New trip** to start a fresh conversation (your preferences are kept).
 
 ---
 
@@ -161,12 +181,21 @@ returns the finished plan. More: [MCP_AND_COMPOSITION.md](MCP_AND_COMPOSITION.md
   data, so it gives general seasonal guidance — the plan still completes, and the
   badge shows `MCP tool offline`.
 - **Switch models**: set `GROQ_MODEL=llama-3.1-8b-instant` in `.env` — faster.
-- **Remove your key** (blank `GROQ_API_KEY`) and re‑run: identical A2A + MCP flow,
-  now with labelled mock answers — proof the protocol/tool and the “brain” are
-  separate (the weather forecast stays *real*, because Open‑Meteo needs no key).
+- **Force mock mode** (set `ATLAS_FORCE_MOCK=1`, no need to touch `.env`) and
+  re‑run: identical A2A + MCP flow, now with labelled mock answers — proof the
+  protocol/tool and the “brain” are separate (the weather forecast stays *real*,
+  because Open‑Meteo needs no key).
+- **Memory survives a restart**: after a couple of turns, **Ctrl+C** the launcher,
+  run `python launch.py` again, and reload the page — your conversation and
+  remembered preferences come back (they're in `data/atlas.db`).
+- **Efficient follow‑ups**: ask *“make it cheaper”* — only Budget + Itinerary
+  re‑run; the others say *“reused (cached)”*. (Delete `data/atlas.db` to wipe all memory.)
+- **Multi‑turn in the terminal**: `python cli.py "5-day trip to Lisbon"` then type
+  follow‑ups at the prompt — same conversation, with memory.
 - **Add a fifth agent** following [ARCHITECTURE.md](ARCHITECTURE.md#extending-it-add-a-5th-specialist).
 
 ---
 
-Next: the concepts in [A2A_EXPLAINED.md](A2A_EXPLAINED.md) · the code map in
+Next: the concepts in [A2A_EXPLAINED.md](A2A_EXPLAINED.md) · memory & intent in
+[MEMORY_AND_INTENT.md](MEMORY_AND_INTENT.md) · the code map in
 [ARCHITECTURE.md](ARCHITECTURE.md).

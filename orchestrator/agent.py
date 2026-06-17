@@ -43,11 +43,13 @@ CARD = AgentCard(
 )
 
 
-async def logic(user_text: str):
+async def logic(user_text: str, ctx):
     """Streaming handler: run plan_trip and narrate the composition.
 
-    This is the SAME `plan_trip` the web UI uses in-process. We bridge its
-    `emit(event)` callback into A2A Progress notes via a queue."""
+    This is the SAME `plan_trip` the web UI uses in-process. We use the incoming
+    A2A `contextId` as the conversation id, so multi-turn works over A2A too: a
+    caller that reuses the same contextId continues the same conversation. We
+    bridge plan_trip's `emit(event)` callback into A2A Progress notes."""
     queue: asyncio.Queue = asyncio.Queue()
 
     async def emit(event: dict) -> None:
@@ -55,7 +57,7 @@ async def logic(user_text: str):
 
     async def run() -> None:
         try:
-            result = await plan_trip(user_text, emit)
+            result = await plan_trip(user_text, emit, context_id=ctx.context_id)
             await queue.put({"type": "__final__", "text": result["final"]})
         except Exception as exc:
             await queue.put({"type": "__final__", "text": f"Sorry, planning failed: {exc}"})
@@ -71,20 +73,27 @@ async def logic(user_text: str):
         t = event.get("type")
         if t == "__final__":
             final_text = event["text"]
-        elif t == "parsed":
-            p = event["parsed"]
-            yield Progress(f"Parsed request: {p['destination']}, {p['days']} days, {p['travelStyle']}")
-        elif t == "discovered":
-            names = ", ".join(a["card"]["name"] for a in event["agents"])
-            yield Progress(f"Discovered {len(event['agents'])} specialist agents: {names}")
+        elif t == "recall":
+            if event.get("preferences"):
+                yield Progress(f"Recalled {len(event['preferences'])} known user preference(s).")
+            if not event["isFirst"]:
+                yield Progress(f"Continuing the conversation (turn {event['turnCount'] + 1}).")
+        elif t == "understood":
+            b = event["beliefs"]
+            yield Progress(f"Understood — goal: {event['intent']['goal']}")
+        elif t == "selection":
+            yield Progress(f"Running {len(event['selected'])} agent(s); reusing "
+                           f"{len(event['reused'])} cached result(s).")
         elif t == "delegate":
-            yield Progress(f"Consulting {event['agentName']} over A2A (message/stream)…")
+            yield Progress(f"Consulting {event['agentName']} over A2A — intent: {event['intent']}")
+        elif t == "agent_reused":
+            yield Progress(f"{event['agent'].title()} unchanged — reusing its cached answer.")
         elif t == "agent_done":
             yield Progress(f"{event['agent'].title()} agent finished.")
         elif t == "agent_error":
             yield Progress(f"{event['agent'].title()} agent unavailable — continuing.")
         elif t == "synthesis_start":
-            yield Progress("Combining all specialist responses into one plan…")
+            yield Progress("Combining all responses into one plan…")
     await task
     yield final_text   # the final synthesised plan (last yield = the answer)
 

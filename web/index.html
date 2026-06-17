@@ -29,7 +29,10 @@
   <main>
     <!-- ===================== CONSOLE / INPUT ===================== -->
     <section class="console panel reveal" style="--d:0">
-      <label class="console-label" for="request">Where shall we go?</label>
+      <div class="console-top">
+        <label class="console-label" for="request">Where shall we go?</label>
+        <button id="new-trip" class="ghost-btn" type="button" hidden>＋ New trip</button>
+      </div>
       <form id="plan-form" class="console-form">
         <textarea id="request" rows="2"
           placeholder="e.g. Plan a 5-day food and temples trip to Kyoto"></textarea>
@@ -39,6 +42,28 @@
         </button>
       </form>
       <div class="chips" id="examples"></div>
+    </section>
+
+    <!-- ===================== CONVERSATION MEMORY ===================== -->
+    <section class="panel memory-panel" id="memory-panel" hidden>
+      <div class="panel-head">
+        <h2>Conversation Memory</h2>
+        <span class="hint">what the host remembers &amp; what it's trying to do</span>
+      </div>
+      <div class="memory-grid">
+        <div class="mem-col">
+          <h3>Goal <span class="mem-tag">intent</span></h3>
+          <p id="mem-goal" class="mem-goal">—</p>
+          <h3>Understanding <span class="mem-tag">beliefs</span></h3>
+          <div id="mem-beliefs" class="mem-chips"></div>
+        </div>
+        <div class="mem-col">
+          <h3>Remembered about you <span class="mem-tag">persists across trips</span></h3>
+          <div id="mem-prefs" class="mem-chips"><span class="mem-empty">nothing yet</span></div>
+          <h3>This conversation</h3>
+          <ol id="mem-turns" class="mem-turns"></ol>
+        </div>
+      </div>
     </section>
 
     <!-- ===================== STAGE: GRAPH + LOG ===================== -->
@@ -103,11 +128,6 @@
       </div>
     </section>
   </main>
-
-  <footer class="footer">
-    <span>Prototype · A2A protocol implemented from scratch over JSON-RPC + SSE ·
-      powered by Groq</span>
-  </footer>
 
   <script src="/app.js"></script>
 </body>

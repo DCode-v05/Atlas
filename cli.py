@@ -23,6 +23,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.rule import Rule
 
+from common import memory
 from common.llm import model_name, using_real_llm
 from orchestrator.orchestrator import plan_trip
 
@@ -32,25 +33,36 @@ COLORS = {"destination": "cyan", "itinerary": "yellow", "budget": "red",
           "weather": "magenta", "host": "gold1"}
 
 
-async def run(request: str) -> None:
-    mode = f"Groq · {model_name()}" if using_real_llm() else "offline mock"
-    console.print(Panel.fit(f"[bold]ATLAS[/] · A2A Trip Concierge\nLLM: {mode}",
-                            border_style="gold1"))
-    console.print(f"[dim]Request:[/] {request}\n")
+async def run_turn(request: str, context_id: str) -> None:
+    console.print(f"\n[bold]You:[/] {request}")
 
     async def emit(ev: dict) -> None:
         t = ev["type"]
-        if t == "parsed":
-            p = ev["parsed"]
-            console.print(f"[gold1]host[/] parsed -> [b]{p['destination']}[/], "
-                          f"{p['days']} days, {', '.join(p['interests'])}, {p['travelStyle']}")
+        if t == "recall":
+            if not ev["isFirst"]:
+                console.print(f"[gold1]host[/] continuing conversation (turn {ev['turnCount'] + 1})")
+            if ev.get("preferences"):
+                console.print(f"[dim]   recalled preferences: {', '.join(ev['preferences'])}[/]")
+        elif t == "understood":
+            b = ev["beliefs"]
+            console.print(f"[gold1]host[/] beliefs -> [b]{b['destination']}[/], {b['days']} days, "
+                          f"{', '.join(b['interests'])}, {b['travelStyle']}")
+            console.print(f"[dim]   goal: {ev['intent']['goal']}"
+                          + (f"  | changed: {', '.join(ev['changed'])}" if ev['changed'] else "") + "[/]")
+        elif t == "memory_added":
+            console.print(f"[green]   remembered for next time: {', '.join(ev['facts'])}[/]")
         elif t == "discovered":
             names = ", ".join(a["card"]["name"] for a in ev["agents"])
             console.print(f"[gold1]host[/] discovered agents via Agent Cards: {names}")
+        elif t == "selection":
+            line = f"[gold1]host[/] running: {', '.join(ev['selected']) or '(none — all cached)'}"
+            if ev["reused"]:
+                line += f"  ·  reusing cached: {', '.join(ev['reused'])}"
+            console.print(line)
             console.print(Rule(style="grey30"))
         elif t == "delegate":
             c = COLORS.get(ev["agent"], "white")
-            console.print(f"[{c}]-> {ev['agentName']}[/]  [dim]message/stream[/]  \"{ev['request']}\"")
+            console.print(f"[{c}]-> {ev['agentName']}[/]  [dim]message/stream · intent:[/] {ev['intent']}")
         elif t == "a2a_event":
             e = ev["event"]
             c = COLORS.get(ev["agent"], "white")
@@ -64,16 +76,18 @@ async def run(request: str) -> None:
             elif e["kind"] == "artifact-update":
                 n = len(e["artifact"]["parts"][0]["text"])
                 console.print(f"   [{c}]{ev['agent']}[/] [dim]artifact-update[/] {n} chars")
+        elif t == "agent_reused":
+            console.print(f"   [dim]{ev['agent']} unchanged — reused cached result[/]")
         elif t == "agent_error":
             console.print(f"   [red]{ev['agent']} error: {ev['message']}[/]")
         elif t == "synthesis_start":
             console.print(Rule(style="grey30"))
             console.print("[gold1]host[/] synthesizing final plan...")
         elif t == "final":
-            console.print(Rule("Your Trip Plan", style="gold1"))
+            console.print(Rule("Trip Plan", style="gold1"))
             console.print(Markdown(ev["text"]))
 
-    await plan_trip(request, emit)
+    await plan_trip(request, emit, context_id=context_id)
 
 
 def main() -> int:
@@ -82,12 +96,26 @@ def main() -> int:
         console.print("Example: python cli.py \"5-day food trip to Tokyo\"")
         return 1
     request = " ".join(sys.argv[1:])
+    mode = f"Groq · {model_name()}" if using_real_llm() else "offline mock"
+    console.print(Panel.fit(f"[bold]ATLAS[/] · A2A Trip Concierge (with memory)\nLLM: {mode}",
+                            border_style="gold1"))
+    context_id = memory.new_context_id()
     try:
-        asyncio.run(run(request))
+        asyncio.run(run_turn(request, context_id))
+        # Multi-turn: keep the same context so the orchestrator REMEMBERS.
+        while True:
+            try:
+                follow = input("\nFollow-up (e.g. \"make it cheaper\"), or Enter to quit: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                break
+            if not follow:
+                break
+            asyncio.run(run_turn(follow, context_id))
     except Exception as exc:
         console.print(f"[red]Error:[/] {exc}")
         console.print("[dim]Are the agents running? Start them with: python launch.py[/]")
         return 1
+    console.print("\n[dim]Conversation saved. Safe travels![/]")
     return 0
 
 

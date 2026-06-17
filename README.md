@@ -19,13 +19,18 @@ independent web service:
 The host agent then **synthesises** their answers into one polished trip plan.
 Every message between agents is real A2A traffic, shown live in the UI.
 
-This prototype also demonstrates two advanced ideas:
+This prototype also demonstrates several advanced ideas:
 - **MCP (Model Context Protocol):** the Weather Advisor doesn’t guess — it calls
   a real weather tool over MCP (backed by the key‑less Open‑Meteo API). That’s
   the *agent‑to‑tool* protocol working alongside the *agent‑to‑agent* one.
 - **Agents composing:** the orchestrator is itself a full **A2A agent** (port
   8100). You can “hire” the whole crew with a single A2A call — see
   [`show_composition.py`](show_composition.py).
+- **Memory & intent:** the orchestrator **remembers the conversation** (ask a
+  follow‑up like *“make it budget and add 2 days”*), **remembers your
+  preferences** across visits, models the **goal/intent** behind the chat, and
+  **only re‑runs the specialists whose inputs changed** (caching the rest). All
+  persisted in SQLite — see [docs/MEMORY_AND_INTENT.md](docs/MEMORY_AND_INTENT.md).
 
 ![The finished trip plan in the UI](docs/images/ui-final.png)
 
@@ -148,9 +153,14 @@ Type a trip request (or click an example chip) and hit **Plan my trip**. Watch:
 - the **A2A Protocol Log** stream the *real* JSON‑RPC frames,
 - each **Agent Response** card fill in, then the **final plan** appear.
 
-| Idle | Mid‑run (host parsing, agents ready) |
+Then ask a **follow‑up** — *“make it budget and add 2 days”* — and watch the
+**Conversation Memory** panel update its beliefs & goal while only the affected
+agents re‑run (the rest show *“reused (cached)”*). Hit **＋ New trip** to start
+fresh (your remembered preferences are kept).
+
+| Mid‑run (agents working, MCP tool firing) | Conversation memory (after a follow‑up) |
 |---|---|
-| ![initial](docs/images/ui-initial.png) | ![working](docs/images/ui-working.png) |
+| ![working](docs/images/ui-working.png) | ![memory](docs/images/ui-memory.png) |
 
 ### ⌨️ 2. The command line (headless)
 With the agents running, run a plan in the terminal:
@@ -189,7 +199,8 @@ A2A/
 ├─ common/
 │  ├─ a2a.py          ★ the entire A2A protocol (models + server + client)
 │  ├─ llm.py            Groq wrapper (+ offline mock fallback)
-│  └─ config.py         which agent/server lives on which port
+│  ├─ memory.py         persistent memory (SQLite): conversations + preferences
+│  └─ config.py         ports + each agent's role & motivation
 ├─ agents/             the 4 specialist A2A *servers* (tiny — logic only)
 │  ├─ destination_expert.py
 │  ├─ itinerary_planner.py
@@ -210,9 +221,11 @@ A2A/
 ├─ show_composition.py  calls the orchestrator agent (agents composing)
 ├─ requirements.txt
 ├─ .env.example
+├─ data/                  SQLite memory DB (created at runtime; git-ignored)
 └─ docs/
    ├─ A2A_EXPLAINED.md        ← what A2A is, for beginners
    ├─ MCP_AND_COMPOSITION.md  ← real tool calls (MCP) + agents composing
+   ├─ MEMORY_AND_INTENT.md    ← memory, multi-turn, intent, efficient coordination
    ├─ ARCHITECTURE.md         ← how this prototype is wired
    └─ WALKTHROUGH.md          ← run it and read the protocol log line‑by‑line
 ```
@@ -227,8 +240,11 @@ Everything is in **`.env`** (see `.env.example`):
 |---|---|---|
 | `GROQ_API_KEY` | *(empty)* | Your Groq key. Empty/placeholder → offline mock mode. |
 | `GROQ_MODEL` | `llama-3.3-70b-versatile` | Any Groq chat model (e.g. `llama-3.1-8b-instant`). |
+| `ATLAS_FORCE_MOCK` | *(unset)* | Set to `1` to force offline mock mode (no Groq) without editing `.env`. |
 
-Ports live in [`common/config.py`](common/config.py).
+Ports + each agent's role/motivation live in [`common/config.py`](common/config.py).
+Conversation memory and preferences are stored in **`data/atlas.db`** (SQLite,
+created automatically — delete the file to wipe all memory).
 
 ---
 
@@ -241,13 +257,14 @@ Ports live in [`common/config.py`](common/config.py).
 | Badge says **“MCP tool offline”** | The weather MCP server (:8200) isn't running. The Weather agent then gives general guidance instead of live data. |
 | Browser can't reach agents / blank cards | Make sure you started everything (`python launch.py`). The UI talks to the gateway, the gateway talks to the agents. |
 | `localhost` doesn't work but `127.0.0.1` does | On Windows `localhost` may resolve to IPv6; this project uses `127.0.0.1` everywhere on purpose. |
-| Groq **rate limit** errors | The free tier has limits; wait a moment, or set a smaller `GROQ_MODEL`. |
+| Groq **rate limit** (429) errors | The free tier caps **tokens per minute *and* per day** (≈100k/day). Agents now fail *gracefully* (a "could not finish" note instead of a crash). Wait for the reset, set a smaller `GROQ_MODEL` (e.g. `llama-3.1-8b-instant`), upgrade, or set **`ATLAS_FORCE_MOCK=1`** to explore in mock mode. |
 
 ---
 
 ## Where to go next
 - **Understand the protocol:** [docs/A2A_EXPLAINED.md](docs/A2A_EXPLAINED.md)
 - **MCP tools + agents composing:** [docs/MCP_AND_COMPOSITION.md](docs/MCP_AND_COMPOSITION.md)
+- **Memory, multi‑turn & intent:** [docs/MEMORY_AND_INTENT.md](docs/MEMORY_AND_INTENT.md)
 - **Understand the code:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - **Follow a live run:** [docs/WALKTHROUGH.md](docs/WALKTHROUGH.md)
 - **Official A2A:** spec & SDKs at <https://a2a-protocol.org>

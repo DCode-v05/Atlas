@@ -27,6 +27,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from common import memory
 from common.a2a import A2AClient
 from common.config import (GATEWAY_PORT, ORCHESTRATOR_AGENT, SPECIALISTS,
                            WEATHER_MCP, base_url, orchestrator_url)
@@ -43,6 +44,8 @@ def _port_open(port: int) -> bool:
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
+memory.init_db()   # create the persistent-memory tables on startup
+
 app = FastAPI(title="Smart Trip Planner — A2A Gateway")
 
 
@@ -57,9 +60,9 @@ async def api_status():
     })
 
 
-async def _probe(key: str, url: str, role: str) -> dict:
+async def _probe(key: str, url: str) -> dict:
     """Fetch one agent's Agent Card (A2A discovery), flagging offline agents."""
-    entry = {"key": key, "url": url, "role": role, "online": False, "card": None}
+    entry = {"key": key, "url": url, "online": False, "card": None}
     try:
         card = await A2AClient(url).get_card()
         entry["card"] = card.model_dump(exclude_none=True)
@@ -72,11 +75,44 @@ async def _probe(key: str, url: str, role: str) -> dict:
 @app.get("/api/agents")
 async def api_agents():
     """Discover the orchestrator + every specialist by fetching their Agent
-    Cards. The orchestrator is itself an A2A agent (it just composes others)."""
-    specialists = [await _probe(s["key"], base_url(s["port"]), "specialist")
-                   for s in SPECIALISTS]
-    orchestrator = await _probe(ORCHESTRATOR_AGENT["key"], orchestrator_url(), "orchestrator")
+    Cards, and attach each one's role & motivation (its 'why')."""
+    specialists = []
+    for s in SPECIALISTS:
+        entry = await _probe(s["key"], base_url(s["port"]))
+        entry["role"], entry["motivation"] = s["role"], s["motivation"]
+        specialists.append(entry)
+    orchestrator = await _probe(ORCHESTRATOR_AGENT["key"], orchestrator_url())
+    orchestrator["role"] = "Orchestrator (host agent)"
+    orchestrator["motivation"] = "Coordinate the specialists into one coherent plan"
     return JSONResponse({"orchestrator": orchestrator, "agents": specialists})
+
+
+@app.get("/api/conversation")
+async def api_conversation(contextId: str = ""):
+    """Return a conversation's remembered state so the UI can restore it after a
+    refresh (and the user's long-term preferences)."""
+    conv = memory.load_conversation(contextId) if contextId else None
+    turns = memory.load_turns(contextId) if contextId else []
+    return JSONResponse({
+        "contextId": contextId,
+        "exists": conv is not None,
+        "beliefs": (conv or {}).get("beliefs"),
+        "intent": (conv or {}).get("intent"),
+        "turns": [{"request": t["request"]} for t in turns],
+        "lastPlan": turns[-1]["plan"] if turns else None,
+        "preferences": memory.load_user_memory(),
+    })
+
+
+@app.post("/api/reset")
+async def api_reset(request: Request):
+    """Forget one conversation and hand back a fresh contextId (a 'New trip').
+    Long-term user preferences are intentionally kept."""
+    body = await request.json()
+    cid = (body.get("contextId") or "").strip()
+    if cid:
+        memory.reset_conversation(cid)
+    return JSONResponse({"contextId": memory.new_context_id()})
 
 
 @app.post("/api/plan")
@@ -84,6 +120,8 @@ async def api_plan(request: Request):
     """Run the orchestrator and stream its events to the browser as SSE."""
     body = await request.json()
     user_request = (body.get("request") or "").strip()
+    # The conversation id: reuse what the browser sends, else start a new one.
+    context_id = (body.get("contextId") or "").strip() or memory.new_context_id()
 
     queue: asyncio.Queue = asyncio.Queue()
 
@@ -92,7 +130,7 @@ async def api_plan(request: Request):
 
     async def run() -> None:
         try:
-            await plan_trip(user_request, emit)
+            await plan_trip(user_request, emit, context_id=context_id)
         except Exception as exc:
             await queue.put({"type": "error", "message": str(exc)})
         finally:

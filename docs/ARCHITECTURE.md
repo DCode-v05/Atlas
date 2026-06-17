@@ -85,14 +85,19 @@ buffers — you see events the instant they happen.
 The LLM is routed through `common/llm.py` (`chat()`), which transparently falls
 back to a labelled offline mock if there's no key:
 
-1. **Parse** (orchestrator): free text → `{destination, days, interests, travelStyle}`
-   (JSON mode, `temperature=0`).
-2. **Each specialist** (4×, in parallel): produces its section from a tailored prompt.
-   The **Weather Advisor** first calls its **MCP tool** (`get_weather` → Open‑Meteo)
-   and feeds the *real* forecast to the LLM.
-3. **Synthesise** (orchestrator): merges the four sections into the final plan.
+1. **Understand** (orchestrator): prior beliefs + the new message → updated
+   **beliefs** `{destination, days, interests, travelStyle}` *and* the
+   conversation **intent** `{goal, constraints}`, which beliefs **changed**, and
+   any new **preferences** to remember (JSON mode).
+2. **Each *selected* specialist** (1–4, in parallel): produces its section. The
+   **Weather Advisor** first calls its **MCP tool** (`get_weather` → Open‑Meteo)
+   and feeds the *real* forecast to the LLM. Unselected agents are **reused from
+   cache** (no call).
+3. **Synthesise** (orchestrator): merges the sections into a plan that honours the intent.
 
-So one “Plan my trip” = **6 Groq calls** + **1 MCP tool call** total.
+A *first* turn ≈ **6 Groq calls** + 1 MCP call; **follow‑ups do less** — only the
+agents whose inputs changed re‑run (see
+[MEMORY_AND_INTENT.md](MEMORY_AND_INTENT.md)).
 
 ---
 
@@ -103,7 +108,9 @@ common/a2a.py     The protocol. Pydantic models for every A2A object +
                   build_agent_app() (server) + A2AClient (client). If you read
                   one file, read this one.
 common/llm.py     chat() → Groq, or a labelled offline mock when no key.
-common/config.py  Ports and base URLs (single source of truth for discovery).
+common/memory.py  Persistent memory (SQLite, stdlib): conversation state +
+                  turn history + long-term user preferences. data/atlas.db.
+common/config.py  Ports + each agent's role & motivation (discovery source).
 
 agents/*.py       Each specialist = an Agent Card + a SYSTEM prompt + a logic()
                   that calls chat(). build_agent_app() turns that into a full
@@ -116,8 +123,9 @@ mcp_servers/weather_server.py
                   the live Open-Meteo API. Streamable-HTTP transport on :8200.
 
 orchestrator/orchestrator.py
-                  The host brain: parse_request() → discover cards →
-                  run_one() per agent (in parallel, streaming) → synthesize().
+                  The stateful host brain: recall (memory) → understand
+                  (beliefs+intent) → discover → SELECT changed agents →
+                  delegate (parallel, cached, retried) → synthesize → persist.
                   Emits events via an async emit() callback.
 orchestrator/agent.py
                   Wraps that brain as a standalone A2A agent (:8100) so the
@@ -155,6 +163,11 @@ web/index.html    Structure.   web/styles.css  Look.   web/app.js  Logic:
 - **`127.0.0.1` everywhere, not `localhost`.** On Windows `localhost` can resolve
   to IPv6 (`::1`) while the servers listen on IPv4 — a confusing source of
   “connection refused”. Using `127.0.0.1` sidesteps it.
+- **Stateful via SQLite + `contextId`.** Memory uses Python's built‑in `sqlite3`
+  (no new dependency) keyed by the A2A `contextId`, so a conversation persists
+  across restarts and the protocol's own context field finally does real work.
+  Agent selection + caching make follow‑ups cheap. Details:
+  [MEMORY_AND_INTENT.md](MEMORY_AND_INTENT.md).
 - **Offline mock fallback.** The whole A2A pipeline runs with no API key so you
   can study the protocol offline; mock text is clearly labelled so it's never
   mistaken for real model output.

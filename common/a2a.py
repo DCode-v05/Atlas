@@ -114,13 +114,18 @@ class TextPart(BaseModel):
 
 class Message(BaseModel):
     """What a client sends to an agent (role='user') and what an agent can
-    send back inside a status update (role='agent')."""
+    send back inside a status update (role='agent').
+
+    `metadata` is a free-form dict the A2A spec allows on a message. We use it to
+    carry a FIPA-ACL-style `performative` ("request"/"inform") and the `intent`
+    behind the message — i.e. *why* it's being sent."""
     kind: Literal["message"] = "message"
     role: Literal["user", "agent"]
     parts: list[TextPart]
     messageId: str = Field(default_factory=lambda: _new_id("msg"))
     taskId: Optional[str] = None
     contextId: Optional[str] = None
+    metadata: Optional[dict] = None
 
 
 class Artifact(BaseModel):
@@ -181,10 +186,11 @@ class TaskState:
 # ---- small helpers to build common objects -------------------------------
 
 def user_text_message(text: str, *, task_id: str | None = None,
-                      context_id: str | None = None) -> Message:
+                      context_id: str | None = None,
+                      metadata: dict | None = None) -> Message:
     """Build a Message a *client* sends to an agent."""
     return Message(role="user", parts=[TextPart(text=text)],
-                   taskId=task_id, contextId=context_id)
+                   taskId=task_id, contextId=context_id, metadata=metadata)
 
 
 def agent_text_message(text: str, *, task_id: str, context_id: str) -> Message:
@@ -223,23 +229,43 @@ class Progress:
         self.note = note
 
 
+class RequestContext:
+    """What the server knows about an incoming A2A call. Handlers that want it
+    (like the orchestrator agent, to thread a conversation) declare a 2nd
+    parameter: `async def logic(user_text, ctx): ...`. Simple agents ignore it."""
+
+    def __init__(self, *, context_id: str, task_id: str,
+                 metadata: dict | None, user_text: str):
+        self.context_id = context_id      # the A2A contextId (conversation id)
+        self.task_id = task_id
+        self.metadata = metadata or {}     # FIPA performative + intent, etc.
+        self.user_text = user_text
+
+
 # A handler ("logic") is EITHER:
 #   • simple   : async def logic(text) -> str            (one answer, no notes)
 #   • streaming: async def logic(text):                  (narrate progress, then
 #                    yield Progress("step 1…"); ...        yield the final text)
 #                    yield "the final answer"
-AgentLogic = Callable[[str], object]
+#   Either form may take an optional 2nd parameter (ctx: RequestContext).
+AgentLogic = Callable[..., object]
 
 # A simple in-memory record of tasks we have produced, so `tasks/get` works.
 _TASKS: dict[str, Task] = {}
 
 
-async def _iter_handler(logic: AgentLogic, user_text: str, working_note: str):
+def _invoke(logic: AgentLogic, ctx: "RequestContext"):
+    """Call the handler with 1 or 2 args depending on its signature."""
+    wants_ctx = len(inspect.signature(logic).parameters) >= 2
+    return logic(ctx.user_text, ctx) if wants_ctx else logic(ctx.user_text)
+
+
+async def _iter_handler(logic: AgentLogic, ctx: "RequestContext", working_note: str):
     """Run a handler of either style and normalise it into a stream of
     ('working', note) items followed by exactly one ('final', text) item."""
     if inspect.isasyncgenfunction(logic):
         final_text = ""
-        async for item in logic(user_text):
+        async for item in _invoke(logic, ctx):
             if isinstance(item, Progress):
                 yield ("working", item.note)
             else:                       # a plain string = the final answer
@@ -248,7 +274,7 @@ async def _iter_handler(logic: AgentLogic, user_text: str, working_note: str):
     else:
         # simple coroutine: emit one generic 'working' note, then the answer
         yield ("working", working_note)
-        answer = await logic(user_text)
+        answer = await _invoke(logic, ctx)
         yield ("final", str(answer))
 
 
@@ -282,18 +308,32 @@ def build_agent_app(card: AgentCard, logic: AgentLogic, *,
         rpc_id = body.get("id")
         method = body.get("method")
         params = body.get("params") or {}
-        user_text = text_of(params.get("message"))
+        incoming = params.get("message") or {}
+
+        # Honour the contextId the caller sent — this is what threads a multi-turn
+        # conversation across calls. Generate one only if absent. Carry metadata
+        # (the FIPA performative + intent) through to the handler too.
+        ctx = RequestContext(
+            context_id=incoming.get("contextId") or _new_id("ctx"),
+            task_id=_new_id("task"),
+            metadata=incoming.get("metadata"),
+            user_text=text_of(incoming),
+        )
+        task_id, context_id = ctx.task_id, ctx.context_id
 
         # ---- method 1: synchronous "ask once, get the finished Task" ----
         if method == "message/send":
-            final_text = ""
-            async for kind, payload in _iter_handler(logic, user_text, working_note):
-                if kind == "final":
-                    final_text = payload
-            task_id, context_id = _new_id("task"), _new_id("ctx")
+            final_text, state = "", TaskState.completed
+            try:
+                async for kind, payload in _iter_handler(logic, ctx, working_note):
+                    if kind == "final":
+                        final_text = payload
+            except Exception as exc:   # a handler error becomes a clean 'failed' task
+                final_text = f"_({card.name} could not finish this request: {exc})_"
+                state = TaskState.failed
             artifact = Artifact(name="result", parts=[TextPart(text=final_text)])
             task = Task(id=task_id, contextId=context_id,
-                        status=TaskStatus(state=TaskState.completed, timestamp=_now()),
+                        status=TaskStatus(state=state, timestamp=_now()),
                         artifacts=[artifact])
             _TASKS[task_id] = task
             return JSONResponse(_jsonrpc_result(rpc_id, _dump(task)))
@@ -304,37 +344,47 @@ def build_agent_app(card: AgentCard, logic: AgentLogic, *,
                 # Emit `submitted`, then forward every progress note as a
                 # `working` status-update as it happens, then the artifact and
                 # a final `completed`. A streaming handler can yield many notes.
-                task_id = _new_id("task")
-                context_id = _new_id("ctx")
-
                 submitted = Task(id=task_id, contextId=context_id,
                                  status=TaskStatus(state=TaskState.submitted, timestamp=_now()))
                 yield _sse(_jsonrpc_result(rpc_id, _dump(submitted)))
 
-                async for kind, payload in _iter_handler(logic, user_text, working_note):
-                    if kind == "working":
-                        working = TaskStatusUpdateEvent(
-                            taskId=task_id, contextId=context_id,
-                            status=TaskStatus(
-                                state=TaskState.working, timestamp=_now(),
-                                message=agent_text_message(payload, task_id=task_id,
-                                                           context_id=context_id)),
-                        )
-                        yield _sse(_jsonrpc_result(rpc_id, _dump(working)))
-                    else:  # 'final'
-                        artifact = Artifact(name="result", parts=[TextPart(text=payload)])
-                        _TASKS[task_id] = Task(
-                            id=task_id, contextId=context_id,
-                            status=TaskStatus(state=TaskState.completed, timestamp=_now()),
-                            artifacts=[artifact])
-                        yield _sse(_jsonrpc_result(rpc_id, _dump(
-                            TaskArtifactUpdateEvent(taskId=task_id, contextId=context_id,
-                                                    artifact=artifact))))
-                        yield _sse(_jsonrpc_result(rpc_id, _dump(
-                            TaskStatusUpdateEvent(
+                try:
+                    async for kind, payload in _iter_handler(logic, ctx, working_note):
+                        if kind == "working":
+                            working = TaskStatusUpdateEvent(
                                 taskId=task_id, contextId=context_id,
+                                status=TaskStatus(
+                                    state=TaskState.working, timestamp=_now(),
+                                    message=agent_text_message(payload, task_id=task_id,
+                                                               context_id=context_id)),
+                            )
+                            yield _sse(_jsonrpc_result(rpc_id, _dump(working)))
+                        else:  # 'final'
+                            artifact = Artifact(name="result", parts=[TextPart(text=payload)])
+                            _TASKS[task_id] = Task(
+                                id=task_id, contextId=context_id,
                                 status=TaskStatus(state=TaskState.completed, timestamp=_now()),
-                                final=True))))          # <-- final=True ends it
+                                artifacts=[artifact])
+                            yield _sse(_jsonrpc_result(rpc_id, _dump(
+                                TaskArtifactUpdateEvent(taskId=task_id, contextId=context_id,
+                                                        artifact=artifact))))
+                            yield _sse(_jsonrpc_result(rpc_id, _dump(
+                                TaskStatusUpdateEvent(
+                                    taskId=task_id, contextId=context_id,
+                                    status=TaskStatus(state=TaskState.completed, timestamp=_now()),
+                                    final=True))))          # <-- final=True ends it
+                except Exception as exc:
+                    # A handler error (e.g. an LLM rate limit) becomes a clean
+                    # 'failed' end-of-stream instead of crashing the connection.
+                    note = f"_({card.name} could not finish this request: {exc})_"
+                    art = Artifact(name="error", parts=[TextPart(text=note)])
+                    yield _sse(_jsonrpc_result(rpc_id, _dump(
+                        TaskArtifactUpdateEvent(taskId=task_id, contextId=context_id, artifact=art))))
+                    yield _sse(_jsonrpc_result(rpc_id, _dump(
+                        TaskStatusUpdateEvent(
+                            taskId=task_id, contextId=context_id,
+                            status=TaskStatus(state=TaskState.failed, timestamp=_now()),
+                            final=True))))
 
             return StreamingResponse(
                 event_stream(),
@@ -397,27 +447,33 @@ class A2AClient:
             resp.raise_for_status()
             return AgentCard(**resp.json())
 
-    def _request(self, method: str, text: str) -> dict:
-        """Build the JSON-RPC request body for message/send or message/stream."""
+    def _request(self, method: str, text: str, *, context_id: str | None = None,
+                 metadata: dict | None = None) -> dict:
+        """Build the JSON-RPC request body for message/send or message/stream.
+        Passing `context_id` threads a conversation; `metadata` carries the
+        FIPA-style performative + intent of the message."""
+        msg = user_text_message(text, context_id=context_id, metadata=metadata)
         return {
             "jsonrpc": "2.0",
             "id": _new_id("rpc"),
             "method": method,
-            "params": {"message": _dump(user_text_message(text))},
+            "params": {"message": _dump(msg)},
         }
 
-    async def send(self, text: str) -> Task:
+    async def send(self, text: str, *, context_id: str | None = None,
+                   metadata: dict | None = None) -> Task:
         """Call `message/send` and get the finished Task back in one response."""
+        req = self._request("message/send", text, context_id=context_id, metadata=metadata)
         async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(self.base_url, json=self._request("message/send", text))
+            resp = await client.post(self.base_url, json=req)
             resp.raise_for_status()
-            result = resp.json()["result"]
-            return Task(**result)
+            return Task(**resp.json()["result"])
 
-    async def stream(self, text: str) -> AsyncIterator[dict]:
+    async def stream(self, text: str, *, context_id: str | None = None,
+                     metadata: dict | None = None) -> AsyncIterator[dict]:
         """Call `message/stream` and yield each A2A event (as a dict) as it
         arrives. Stops after the event with final=True."""
-        req = self._request("message/stream", text)
+        req = self._request("message/stream", text, context_id=context_id, metadata=metadata)
         async with httpx.AsyncClient(timeout=None) as client:
             async with client.stream("POST", self.base_url, json=req) as resp:
                 resp.raise_for_status()
