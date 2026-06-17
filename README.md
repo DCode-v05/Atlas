@@ -262,6 +262,7 @@ created automatically — delete the file to wipe all memory).
 ---
 
 ## Where to go next
+- **Patterns & what's new (negotiation, mesh, personas):** [docs/A2A_PATTERNS.md](docs/A2A_PATTERNS.md)
 - **Understand the protocol:** [docs/A2A_EXPLAINED.md](docs/A2A_EXPLAINED.md)
 - **MCP tools + agents composing:** [docs/MCP_AND_COMPOSITION.md](docs/MCP_AND_COMPOSITION.md)
 - **Memory, multi‑turn & intent:** [docs/MEMORY_AND_INTENT.md](docs/MEMORY_AND_INTENT.md)

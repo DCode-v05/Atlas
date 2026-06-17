@@ -22,13 +22,16 @@ like any other A2A call, so you can watch it in the protocol log.
 """
 from __future__ import annotations
 
+import asyncio
 import inspect
 
-from common.a2a import Progress
+from common.a2a import A2AClient, Progress
+from common.config import base_url, specialist
 from common.llm import chat, using_real_llm
 
-# Marker we put in A2A message metadata to switch an agent into "talk" mode.
-NEGOTIATION_MODE = "negotiate"
+# Markers we put in A2A message metadata to switch an agent's behaviour.
+NEGOTIATION_MODE = "negotiate"   # the host-facilitated round-table (hierarchical)
+CONSULT_MODE = "consult"          # one agent calling ANOTHER directly (mesh)
 
 # Each specialist as a person: a name, a title, a speaking style, an emoji.
 PERSONAS: dict[str, dict] = {
@@ -81,6 +84,7 @@ _MOCK_BANNER = "⚠️(mock) "
 _MOCK_LINES: dict[str, dict[str, str]] = {
     "budget": {
         "concern": "Honestly, this is looking a little rich for the budget — could we trim one paid attraction and lean on free sights?",
+        "answer": "There's a little headroom if we keep most meals casual — one nicer dinner is fine, not three.",
         "default": "Works for me as long as we keep a buffer for surprises; I'll pad the estimate slightly.",
     },
     "itinerary": {
@@ -89,6 +93,7 @@ _MOCK_LINES: dict[str, dict[str, str]] = {
     },
     "weather": {
         "inform": "Heads up, Priya — one afternoon looks wet, so let's keep an indoor option ready and move the outdoor day earlier.",
+        "answer": "Looking at the forecast, one afternoon skews wet — I'd keep that day flexible, but the rest is clear.",
         "default": "The forecast is mild overall, so the current pacing should hold up fine.",
     },
     "cuisine": {
@@ -117,6 +122,36 @@ async def negotiation_reply(key: str, message_text: str, performative: str) -> s
 
 
 # ---------------------------------------------------------------------------
+# MESH (peer-to-peer): one agent decides, by its OWN role, to call another agent
+# directly over A2A — no orchestrator in the loop. Each entry says: when THIS
+# agent speaks at the round-table, it first phones a peer to ground its opinion.
+# ---------------------------------------------------------------------------
+CONSULT_POLICY: dict[str, dict] = {
+    "itinerary": {"peer": "weather", "why": "ground the plan in the real forecast",
+                  "ask": "Quick one for the plan — will the weather disrupt any "
+                         "outdoor day, and which day should I keep flexible?"},
+    "cuisine":   {"peer": "budget", "why": "keep the food plan within budget",
+                  "ask": "How much headroom is there for food — should I lean on "
+                         "cheap local eats, or can we splurge on one meal?"},
+}
+
+
+async def consult_peer(from_key: str, to_key: str, question: str) -> str:
+    """Call ANOTHER agent directly over A2A (mesh). Returns the peer's reply text.
+
+    This is a real `message/stream` A2A call from one specialist to another — the
+    orchestrator never sees it. The `mode=consult` metadata tells the peer to
+    answer briefly, in persona, rather than do its full job."""
+    client = A2AClient(base_url(specialist(to_key)["port"]))
+    meta = {"mode": CONSULT_MODE, "performative": "query", "from": from_key}
+    said = ""
+    async for event in client.stream(question, metadata=meta):
+        if event.get("kind") == "artifact-update":
+            said = event["artifact"]["parts"][0]["text"]
+    return said.strip()
+
+
+# ---------------------------------------------------------------------------
 # Wrap an agent's normal "job" so it ALSO knows how to negotiate
 # ---------------------------------------------------------------------------
 def persona_aware(key: str, job):
@@ -133,10 +168,36 @@ def persona_aware(key: str, job):
 
     async def logic(user_text: str, ctx):
         meta = ctx.metadata or {}
+
+        # MESH: a peer is calling THIS agent directly — answer briefly, in persona.
+        if meta.get("mode") == CONSULT_MODE:
+            frm = meta.get("from", "a colleague")
+            yield Progress(f"{p['name']} is answering {persona(frm)['name']} directly (peer-to-peer)…")
+            yield await negotiation_reply(key, user_text, "answer")
+            return
+
+        # ROUND-TABLE: this agent takes its turn in the host-facilitated discussion.
         if meta.get("mode") == NEGOTIATION_MODE:
             performative = meta.get("performative", "inform")
             yield Progress(f"{p['name']} is weighing in ({performative})…")
-            yield await negotiation_reply(key, user_text, performative)
+
+            # Some agents DECIDE, by their own role, to phone a peer first (mesh).
+            peer_note = ""
+            policy = CONSULT_POLICY.get(key)
+            if policy:
+                peer, peer_name = policy["peer"], persona(policy["peer"])["name"]
+                yield Progress(f"{p['name']} is consulting {peer_name} directly over "
+                               f"A2A (mesh) — to {policy['why']}…")
+                try:
+                    answer = await asyncio.wait_for(
+                        consult_peer(key, peer, policy["ask"]), timeout=20)
+                    if answer:
+                        peer_note = (f"\n\n[{peer_name} just told you directly over "
+                                     f"A2A: \"{answer}\". Weave this into your reply.]")
+                except Exception:
+                    pass                     # peer offline/slow → speak without it
+
+            yield await negotiation_reply(key, user_text + peer_note, performative)
             return
 
         # Normal job — preserve whichever handler style the agent uses.
