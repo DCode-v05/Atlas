@@ -74,5 +74,25 @@ async def run_meeting(employee, reporter, hired, *, run_id: str, mission: str,
             await reporter.emit("say", meetingId=meet_ctx, round=rnd, speakerId=p["agentId"],
                                 role=p["role"], persona=p["persona"], performative=perf, text=line)
 
+    # Final pass: after the back-and-forth, each specialist states their CONCLUSION
+    # — a concise final takeaway for their part, reflecting what the team agreed.
+    full = "\n".join(f"{lbl}: {txt[:160]}" for lbl, txt in transcript) or "(no discussion)"
+    for p in parts:
+        md = meta(Performative.inform, role=employee.identity.role,
+                  intent=f"final summary from {p['role']}", delegation_depth=child_depth,
+                  extra={"runId": run_id, "contextId": meet_ctx, "senderId": employee.agent_id,
+                         "mission": mission, "meeting": True, "topology": "group",
+                         "persona": p["persona"], "turnPerformative": "conclude", "round": "final"})
+        await reporter.message(to=p["agentId"], to_role=p["role"],
+                               performative=Performative.inform,
+                               intent=f"final takeaway · {p['persona']}",
+                               depth=child_depth, context_id=meet_ctx,
+                               text=f"(conclusion) {p['persona']}, your final takeaway?")
+        task = await A2AClient(p["url"]).send_text(full, context_id=meet_ctx, metadata=md)
+        line = result_text(task) or ""
+        transcript.append((f"{p['persona']} · {p['role']} (final)", line))
+        await reporter.emit("summary", meetingId=meet_ctx, speakerId=p["agentId"],
+                            role=p["role"], persona=p["persona"], text=line)
+
     await reporter.emit("meeting", phase="close", meetingId=meet_ctx)
     return transcript

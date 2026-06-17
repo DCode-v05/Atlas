@@ -28,6 +28,8 @@ _ACTS = {
     "inform":   "share a fact or constraint the others should factor in",
     "propose":  "make a concrete proposal that moves the plan forward",
     "agree":    "converge: confirm what you support and lock in the decision",
+    "conclude": "give your FINAL, concise takeaway for YOUR part of the plan in 2-3 "
+                "sentences, reflecting what the team agreed (include any ₹ figures)",
 }
 
 # A canonical product-company role catalogue. The offline planner draws from this

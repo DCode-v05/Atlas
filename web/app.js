@@ -203,6 +203,24 @@ function addRoundTableBubble(ev) {
   thread.appendChild(b);
   b.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
+function addSummaryCard(ev) {
+  $("#rt-summary").hidden = false;
+  const color = PERSONA_COLOR_BY_ROLE(ev.role);
+  const card = el("div", "rt-sum-card");
+  card.style.borderTopColor = color;
+  card.innerHTML =
+    `<div class="rt-sum-name" style="color:${color}">${escapeHtml(ev.persona || "")}</div>
+     <div class="rt-sum-role">${escapeHtml(ev.role || "")}</div>
+     <div class="rt-sum-text">${escapeHtml(ev.text || "")}</div>`;
+  $("#rt-summary-grid").appendChild(card);
+}
+// a stable accent colour per specialist (cycled), so cards look intentional
+const _SUM_COLORS = ["var(--teal)", "var(--amber-soft)", "var(--coral)", "var(--violet)", "var(--green)"];
+const _sumColorMap = {};
+function PERSONA_COLOR_BY_ROLE(role) {
+  if (!(role in _sumColorMap)) _sumColorMap[role] = _SUM_COLORS[Object.keys(_sumColorMap).length % _SUM_COLORS.length];
+  return _sumColorMap[role];
+}
 
 /* ---------- ledgers / metrics ---------- */
 function renderLedgers(L) {
@@ -269,6 +287,9 @@ function handle(ev) {
     case "say":
       addRoundTableBubble(ev);
       break;
+    case "summary":
+      addSummaryCard(ev);
+      break;
     case "cap": logSys(`cap hit (${escapeHtml(ev.kind)}): ${escapeHtml(ev.message)}`, "cap"); break;
   }
 }
@@ -284,6 +305,8 @@ function resetView() {
   $("#edges").innerHTML = "";
   $("#log").innerHTML = ""; $("#final-panel").hidden = true; $("#compare-panel").hidden = true;
   $("#roundtable").hidden = true; $("#rt-thread").innerHTML = "";
+  $("#rt-summary").hidden = true; $("#rt-summary-grid").innerHTML = "";
+  for (const k in _sumColorMap) delete _sumColorMap[k];
   renderGraph(); bumpMetrics();
 }
 function finish() { running = false; const g = $("#go"); g.disabled = false; g.classList.remove("running"); g.querySelector(".go-label").textContent = "Start mission"; }

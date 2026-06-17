@@ -250,6 +250,16 @@ main { max-width: 1240px; margin: 0 auto; padding: clamp(18px,3vw,34px) clamp(16
 }
 .rt-text { color: var(--cream); font-size: 14.5px; line-height: 1.5; }
 
+/* round-table conclusion: one card per specialist */
+.rt-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.rt-sum-card {
+  background: var(--ink-2); border: 1px solid var(--line); border-top: 3px solid var(--muted);
+  border-radius: 10px; padding: 12px 14px; animation: rise 0.4s ease both;
+}
+.rt-sum-name { font-family: var(--mono); font-size: 13px; font-weight: 600; }
+.rt-sum-role { font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: .6px; margin-bottom: 7px; }
+.rt-sum-text { color: var(--cream); font-size: 14px; line-height: 1.5; }
+
 /* --- ledgers ------------------------------------------------------------- */
 .ledgers { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; }
 @media (max-width: 760px) { .ledgers { grid-template-columns: 1fr; } }
