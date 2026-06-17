@@ -17,9 +17,18 @@ from __future__ import annotations
 import json
 import re
 
-from config import MAX_DELEGATION_DEPTH
+from config import CURRENCY, MAX_DELEGATION_DEPTH
 from llm.client import LLMResult, complete, est_tokens, using_real_llm
 from org.onboarding import Identity
+
+# What each FIPA speech act means when an agent takes a turn in a round-table.
+_ACTS = {
+    "concern":  "raise a concrete concern or risk you see",
+    "counter":  "push back on something said and offer a specific alternative",
+    "inform":   "share a fact or constraint the others should factor in",
+    "propose":  "make a concrete proposal that moves the plan forward",
+    "agree":    "converge: confirm what you support and lock in the decision",
+}
 
 # A canonical product-company role catalogue. The offline planner draws from this
 # deterministically; the online planner is free to invent its own roles.
@@ -83,7 +92,8 @@ async def do_work(identity: Identity, task_text: str, mission: str) -> tuple[str
     if using_real_llm():
         sys = (f"You are the {identity.role}. Backstory: {identity.backstory or 'a seasoned expert'}. "
                f"Produce a concise, concrete deliverable (Markdown, < 180 words) for your part of "
-               f"the mission. Do not restate the whole mission.")
+               f"the mission. Do not restate the whole mission. "
+               f"For any costs or budgets, use {CURRENCY}.")
         res = await complete(sys, f"OVERALL MISSION: {mission}\nYOUR TASK: {task_text}",
                              temperature=0.4, max_tokens=400)
         return res.text, res.tokens
@@ -99,9 +109,11 @@ async def do_work(identity: Identity, task_text: str, mission: str) -> tuple[str
 async def synthesize(mission: str, contributions: list[tuple[str, str]]) -> tuple[str, int]:
     """contributions: list of (role, text)."""
     if using_real_llm():
-        sys = ("You are the manager. Merge the team's contributions into ONE coherent, "
-               "well-structured Markdown result that fulfils the mission. No duplication; "
-               "do not mention that inputs came separately.")
+        sys = ("You are the manager. Merge the team's contributions (including any "
+               "round-table discussion) into ONE coherent, well-structured Markdown result "
+               "that fulfils the mission and HONOURS the decisions the team converged on. "
+               "No duplication; do not mention that inputs came separately. "
+               f"For any costs or budgets, use {CURRENCY}.")
         joined = "\n\n".join(f"### From {role}\n{text}" for role, text in contributions)
         res = await complete(sys, f"MISSION: {mission}\n\nCONTRIBUTIONS:\n{joined}",
                              temperature=0.3, max_tokens=1200)
@@ -111,6 +123,31 @@ async def synthesize(mission: str, contributions: list[tuple[str, str]]) -> tupl
         parts.append(text if text.strip().startswith("#") else f"## {role}\n{text}")
     out = "\n\n".join(parts)
     return out, est_tokens(mission, out)
+
+
+# ------------------------------------------------------------------- discuss
+async def discuss(role: str, persona: str, performative: str, mission: str,
+                  transcript: str) -> tuple[str, int]:
+    """One spoken turn in a round-table, in persona. Returns (line, tokens).
+
+    The agent talks like a real person (first-person, addresses colleagues by
+    name) and its speech act is shaped by the `performative`. This is what makes
+    the round-table read like a human conversation rather than a list of reports.
+    """
+    act = _ACTS.get(performative, "share your view")
+    if using_real_llm():
+        sys = (f"You are {persona}, the {role}, in a live team round-table refining a plan. "
+               f"Speak in FIRST PERSON, 2-4 natural sentences, like a real person in a meeting. "
+               f"Address colleagues by their first name where it fits. Your speech act now is "
+               f"'{performative}' — {act}. Build directly on what was said; help REFINE the plan. "
+               f"For any costs, use {CURRENCY}. No markdown, no headings, no lists — just talk.")
+        user = (f"MISSION: {mission}\n\nDISCUSSION SO FAR:\n{transcript or '(you open the round-table)'}"
+                f"\n\nYour turn, {persona}.")
+        res = await complete(sys, user, temperature=0.75, max_tokens=200)
+        return res.text.strip(), res.tokens
+    line = (f"({persona}, {performative}) On '{mission[:40]}', I'd {act}; "
+            f"let's keep costs in {CURRENCY} and refine from there.")
+    return line, est_tokens(transcript, line)
 
 
 # ------------------------------------------------------------------ helpers

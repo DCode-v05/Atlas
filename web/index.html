@@ -34,7 +34,7 @@
         <select id="topology" title="communication topology">
           <option value="hierarchical">Hierarchical</option>
           <option value="mesh">Mesh · peer-to-peer</option>
-          <option value="group">Group · meetings</option>
+          <option value="group" selected>Group · round-table</option>
           <option value="compare">Compare all three</option>
         </select>
         <button id="go" type="submit"><span class="go-label">Start mission</span><span class="go-arrow">➜</span></button>
@@ -82,6 +82,15 @@
         </div>
         <div class="log" id="log"><div class="log-empty">The wire is quiet. Start a mission.</div></div>
       </div>
+    </section>
+
+    <!-- round-table: the team negotiates a refined plan, in their own words -->
+    <section class="panel roundtable-panel reveal" id="roundtable" hidden>
+      <div class="panel-head">
+        <h2>Agent Round-Table</h2>
+        <span class="hint" id="rt-sub">the team negotiates over A2A — in their own words, across several rounds</span>
+      </div>
+      <div class="rt-thread" id="rt-thread"></div>
     </section>
 
     <!-- shared ledgers -->

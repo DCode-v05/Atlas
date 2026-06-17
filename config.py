@@ -33,6 +33,10 @@ MAX_HEADCOUNT = int(os.getenv("ATLAS_MAX_HEADCOUNT", "12"))     # total hires pe
 MAX_DELEGATION_DEPTH = int(os.getenv("ATLAS_MAX_DEPTH", "3"))   # the CEO is depth 0
 TOKEN_BUDGET = int(os.getenv("ATLAS_TOKEN_BUDGET", "150000"))   # advisory, shown in UI
 MEETING_MAX_PARTICIPANTS = int(os.getenv("ATLAS_MEETING_MAX", "5"))
+MEETING_ROUNDS = int(os.getenv("ATLAS_MEETING_ROUNDS", "3"))  # back-and-forth passes in a round-table
+
+# Currency the agents should use for any costs/budgets in their output.
+CURRENCY = os.getenv("ATLAS_CURRENCY", "Indian Rupees (₹)")
 MAX_REPORTS_PER_MANAGER = int(os.getenv("ATLAS_MAX_REPORTS", "4"))
 CNP_CANDIDATES = int(os.getenv("ATLAS_CNP_CANDIDATES", "2"))   # employees that bid per role
 

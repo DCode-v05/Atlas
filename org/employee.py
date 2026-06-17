@@ -18,7 +18,7 @@ from __future__ import annotations
 import argparse
 
 import config
-from org.cognition import do_work
+from org.cognition import discuss, do_work
 from org.contract_net import bid_score
 from org.delegation import run_as_manager, should_manage
 from org.envelope import Performative, meta, read
@@ -93,6 +93,16 @@ class Employee:
                                    performative=Performative.inform, intent="consult reply",
                                    depth=self.identity.depth, context_id=context_id, text=note)
             return note
+
+        # --- a round-table turn: talk in persona, don't fan out or do full work ---
+        if env.get("meeting"):
+            persona = env.get("persona") or self.identity.role
+            turn_perf = env.get("turnPerformative") or "inform"
+            mission = env.get("mission") or user_text
+            line, tokens = await discuss(self.identity.role, persona, turn_perf,
+                                         mission, user_text)
+            await reporter.llm(tokens, "discuss")
+            return line
 
         # --- doing the work (a request) ---
         sender_id = env.get("senderId", "Board")

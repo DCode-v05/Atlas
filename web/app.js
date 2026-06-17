@@ -12,10 +12,10 @@ const SVGNS = "http://www.w3.org/2000/svg";
 const nowt = () => { const d = new Date(); return d.toLocaleTimeString([], { hour12: false }) + "." + String(d.getMilliseconds()).padStart(3, "0"); };
 
 const EXAMPLES = [
+  "Plan a 5-day food and temples trip to Kyoto",
   "Design and spec a privacy-first smart doorbell",
-  "Plan a weekend coffee festival for 5,000 attendees",
+  "Organise a 7-day budget backpacking route through Vietnam",
   "Write a go-to-market plan for an AI note-taking app",
-  "Design a four-week beginner curriculum for learning Python",
 ];
 
 const members = {};          // id -> {role, parentId, depth, status, x, y}
@@ -185,6 +185,25 @@ function logSys(text, cls) {
     <span class="log-msg">${text}</span></div>`, (cls || "sys"));
 }
 
+/* ---------- round-table ---------- */
+const PERF_COLOR = { concern: "var(--coral)", counter: "var(--amber)", inform: "var(--teal)",
+                     propose: "var(--green)", agree: "var(--violet)" };
+function addRoundTableBubble(ev) {
+  const thread = $("#rt-thread");
+  $("#roundtable").hidden = false;
+  const color = PERF_COLOR[ev.performative] || "var(--muted)";
+  const b = el("div", "rt-bubble");
+  b.style.borderLeftColor = color;
+  b.innerHTML =
+    `<div class="rt-meta">
+       <span class="rt-name" style="color:${color}">${escapeHtml(ev.persona || "")} · ${escapeHtml(ev.role || "")}</span>
+       <span class="rt-perf">${escapeHtml(ev.performative || "")}</span>
+     </div>
+     <div class="rt-text">${escapeHtml(ev.text || "")}</div>`;
+  thread.appendChild(b);
+  b.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
 /* ---------- ledgers / metrics ---------- */
 function renderLedgers(L) {
   if (!L) return;
@@ -234,9 +253,21 @@ function handle(ev) {
     case "llm": tally.tokens += ev.tokens || 0; bumpMetrics(); break;
     case "ledger": fetchLedgers(); break;
     case "meeting":
-      if (ev.phase === "open") { if (nodeEls[ev.chair]) nodeEls[ev.chair].classList.add("meet");
-        logSys(`meeting opened by <span class="k">${escapeHtml(ev.chair)}</span> · ${escapeHtml((ev.participants || []).join(", "))}`, "meet"); }
-      else { if (nodeEls[ev.chair]) nodeEls[ev.chair].classList.remove("meet"); logSys("meeting closed", "meet"); }
+      if (ev.phase === "open") {
+        if (nodeEls[ev.chair]) nodeEls[ev.chair].classList.add("meet");
+        $("#roundtable").hidden = false;
+        $("#rt-thread").innerHTML = "";
+        $("#rt-sub").textContent =
+          `${(ev.participants || []).join(", ")} — ${ev.rounds || 1} rounds of refinement over A2A`;
+        logSys(`round-table opened by <span class="k">${escapeHtml(ev.chair)}</span> · ${escapeHtml((ev.participants || []).join(", "))}`, "meet");
+      } else { if (nodeEls[ev.chair]) nodeEls[ev.chair].classList.remove("meet"); logSys("round-table closed", "meet"); }
+      break;
+    case "round":
+      $("#roundtable").hidden = false;
+      $("#rt-thread").appendChild(el("div", "rt-round", `Round ${ev.round} / ${ev.of}`));
+      break;
+    case "say":
+      addRoundTableBubble(ev);
       break;
     case "cap": logSys(`cap hit (${escapeHtml(ev.kind)}): ${escapeHtml(ev.message)}`, "cap"); break;
   }
@@ -252,6 +283,7 @@ function resetView() {
   $("#canvas").querySelectorAll(".node, .packet").forEach((n) => n.remove());
   $("#edges").innerHTML = "";
   $("#log").innerHTML = ""; $("#final-panel").hidden = true; $("#compare-panel").hidden = true;
+  $("#roundtable").hidden = true; $("#rt-thread").innerHTML = "";
   renderGraph(); bumpMetrics();
 }
 function finish() { running = false; const g = $("#go"); g.disabled = false; g.classList.remove("running"); g.querySelector(".go-label").textContent = "Start mission"; }
