@@ -40,6 +40,23 @@ CATALOG = [
     ("Quality Lead", "Define the quality bar, risks and a test strategy"),
 ]
 
+# A FIXED PRESET: a travel mission always hires these five specialists — the exact
+# roles from the original Smart Trip Planner — instead of an emergent team. (Applies
+# at the CEO level only; sub-missions still decompose normally.)
+TRIP_ROLES = [
+    ("Destination Expert", "overview of the place, best time to visit, and local etiquette tips"),
+    ("Itinerary Planner", "a realistic day-by-day plan matched to the traveller's interests"),
+    ("Budget & Packing Advisor", "a rough cost estimate (in ₹) and a packing list"),
+    ("Weather Advisor", "the seasonal weather outlook and what it means for the plans"),
+    ("Local Cuisine Expert", "must-try local dishes and the kinds of places to eat"),
+]
+_TRIP_RE = re.compile(r"\b(trip|travel|itinerary|vacation|holiday|tour|sightsee|"
+                      r"backpack|getaway|visit|days?\s+in)\b", re.I)
+
+
+def is_trip_mission(text: str) -> bool:
+    return bool(_TRIP_RE.search(text or ""))
+
 
 # ---------------------------------------------------------------- decompose
 _DECOMPOSE_SYS = (
@@ -55,6 +72,18 @@ def _wants_team(title: str) -> bool:
 async def decompose(task_text: str, identity: Identity) -> tuple[dict, int]:
     child_depth = identity.depth + 1
     can_recurse = child_depth < MAX_DELEGATION_DEPTH      # is there depth budget below?
+
+    # FIXED PRESET: at the top (CEO) level, a trip mission always hires the five
+    # original specialists — deterministic, regardless of mock vs. live LLM.
+    if identity.depth == 0 and is_trip_mission(task_text):
+        roles = [{"title": t, "goal": g, "manage": False,
+                  "task": f"As the {t} for the trip '{task_text}', deliver your part: {g}."}
+                 for (t, g) in TRIP_ROLES]
+        plan = ("Trip preset — hiring the five travel specialists: "
+                + ", ".join(t for t, _ in TRIP_ROLES) + ".")
+        return ({"plan": plan,
+                 "facts": [f"Mission: {task_text}", "Preset team: 5 travel specialists"],
+                 "roles": roles}, est_tokens(task_text, plan))
 
     if using_real_llm():
         user = f"MISSION: {task_text}\nYou are the {identity.role}. Decompose into 2-4 roles."

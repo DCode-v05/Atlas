@@ -37,14 +37,14 @@ MEETING_ROUNDS = int(os.getenv("ATLAS_MEETING_ROUNDS", "3"))  # back-and-forth p
 
 # Currency the agents should use for any costs/budgets in their output.
 CURRENCY = os.getenv("ATLAS_CURRENCY", "Indian Rupees (₹)")
-MAX_REPORTS_PER_MANAGER = int(os.getenv("ATLAS_MAX_REPORTS", "4"))
+MAX_REPORTS_PER_MANAGER = int(os.getenv("ATLAS_MAX_REPORTS", "5"))  # 5 → fits the trip preset
 CNP_CANDIDATES = int(os.getenv("ATLAS_CNP_CANDIDATES", "2"))   # employees that bid per role
 
 # --- Runtime: how "hiring" is physically backed ---------------------------
 #   "pooled"  -> pre-warm POOL_SIZE generic employee servers; hire = onboard a free one
 #   "dynamic" -> spawn a real A2A server per hire on demand, up to MAX_HEADCOUNT
 RUNTIME = os.getenv("ATLAS_RUNTIME", "pooled")
-POOL_SIZE = int(os.getenv("ATLAS_POOL_SIZE", "8"))   # pre-warmed servers; < cap is fine
+POOL_SIZE = int(os.getenv("ATLAS_POOL_SIZE", "12"))  # enough for the CEO + 5 parallel auctions
 
 
 def employee_port(i: int) -> int:

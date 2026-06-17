@@ -95,7 +95,7 @@ async def _run(c, gw, topo):
 
 
 async def main() -> int:
-    rt = PooledRuntime(size=8)
+    rt = PooledRuntime(size=12)   # the trip preset hires 5 in parallel auctions
     rt.start()
     app = create_app(rt)
     server = uvicorn.Server(uvicorn.Config(app, host=config.HOST, port=config.GATEWAY_PORT,
