@@ -26,6 +26,9 @@ load_dotenv()
 _API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 _FORCE_MOCK = os.getenv("ATLAS_FORCE_MOCK", "0") == "1"
 _MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+# When the primary model is rate-limited (e.g. its daily token cap), fall back to
+# a lighter model that has its own budget so a run still completes with real text.
+_FALLBACK_MODEL = os.getenv("GROQ_FALLBACK_MODEL", "llama-3.1-8b-instant").strip()
 _OVERRIDE_MOCK = False
 
 _client = None
@@ -70,16 +73,23 @@ async def complete(system: str, user: str, *, temperature: float = 0.3,
                    max_tokens: int = 900) -> LLMResult:
     """One LLM turn. Returns the text and a token count (real usage or estimate)."""
     if using_real_llm():
-        def call() -> LLMResult:
+        def call(model: str) -> LLMResult:
             resp = _groq().chat.completions.create(
-                model=_MODEL, temperature=temperature, max_tokens=max_tokens,
+                model=model, temperature=temperature, max_tokens=max_tokens,
                 messages=[{"role": "system", "content": system},
                           {"role": "user", "content": user}])
             txt = (resp.choices[0].message.content or "").strip()
             usage = getattr(resp, "usage", None)
             tok = getattr(usage, "total_tokens", 0) or est_tokens(system, user, txt)
             return LLMResult(txt, int(tok))
-        return await asyncio.to_thread(call)
+        try:
+            return await asyncio.to_thread(call, _MODEL)
+        except Exception:
+            # Primary failed (most often a 429 daily-cap). Try the fallback model,
+            # which has its own budget, so the run still produces real output.
+            if _FALLBACK_MODEL and _FALLBACK_MODEL != _MODEL:
+                return await asyncio.to_thread(call, _FALLBACK_MODEL)
+            raise
     txt = _mock(system, user)
     return LLMResult(txt, est_tokens(system, user, txt))
 
