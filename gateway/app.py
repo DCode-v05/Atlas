@@ -1,170 +1,258 @@
 """
-gateway/app.py — the web gateway that powers the browser UI.
-============================================================
+gateway/app.py — the one server the browser talks to, and the org's nerve centre.
 
-The browser only ever talks to THIS server (same origin), which keeps things
-simple and avoids cross-origin (CORS) issues. The gateway, in turn, is an A2A
-client of the three specialist agents (via the orchestrator).
+Responsibilities:
+  * serve the single-page UI
+  * HR: hand a free employee to whoever asks (POST /hr/allocate) — the only bit
+    of central provisioning; role conferral + work happen agent-to-agent
+  * telemetry: ingest every agent's events (POST /api/ingest), timestamp+persist
+    them, fold them into the live org chart / metrics / ledgers, and broadcast
+    them to the browser over SSE (GET /api/stream)
+  * drive a mission: onboard the CEO and hand over the mission (POST /api/run)
 
-Endpoints
----------
-GET  /                 -> the single-page UI (static files in ../web)
-GET  /api/status       -> whether we're using real Groq or the offline mock
-GET  /api/agents       -> the three Agent Cards (for the "agent network" panel)
-POST /api/plan         -> runs the orchestrator and STREAMS every A2A event
-                          to the browser as Server-Sent Events, so the UI can
-                          visualise the live agent-to-agent conversation.
-
-Run it with:  python -m gateway.app
+The gateway never does the agents' thinking — it observes and provisions.
 """
 from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
+import time
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from common import memory
-from common.a2a import A2AClient
-from common.config import (GATEWAY_PORT, ORCHESTRATOR_AGENT, SPECIALISTS,
-                           WEATHER_MCP, base_url, orchestrator_url)
-from common.llm import model_name, using_real_llm
-from orchestrator.orchestrator import plan_trip
-
-import socket
-
-
-def _port_open(port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.4)
-        return s.connect_ex(("127.0.0.1", port)) == 0
+import config
+from llm.client import model_name, using_real_llm
+from memory import store
+from org import ceo, ledger
+from org.metrics import Metrics
+from org.registry import OrgChart
+from pathlib import Path
+from protocol.models import new_id, now_iso
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
-memory.init_db()   # create the persistent-memory tables on startup
 
-app = FastAPI(title="Smart Trip Planner — A2A Gateway")
-
-
-@app.get("/api/status")
-async def api_status():
-    """Tell the UI whether real AI or the offline mock is in use, and whether
-    the weather MCP tool server is reachable."""
-    return JSONResponse({
-        "usingRealLLM": using_real_llm(),
-        "model": model_name() if using_real_llm() else "offline-mock",
-        "mcpOnline": _port_open(WEATHER_MCP["port"]),
-    })
-
-
-async def _probe(key: str, url: str) -> dict:
-    """Fetch one agent's Agent Card (A2A discovery), flagging offline agents."""
-    entry = {"key": key, "url": url, "online": False, "card": None}
-    try:
-        card = await A2AClient(url).get_card()
-        entry["card"] = card.model_dump(exclude_none=True)
-        entry["online"] = True
-    except Exception as exc:
-        entry["error"] = str(exc)
-    return entry
+class RunState:
+    def __init__(self, run_id: str, mission: str, topology: str):
+        self.run_id = run_id
+        self.mission = mission
+        self.topology = topology
+        self.context_id = run_id                 # one mission = one conversation thread
+        self.seq = 0
+        self.events: list[dict] = []
+        self.subscribers: set[asyncio.Queue] = set()
+        self.org = OrgChart()
+        self.metrics = Metrics()
+        self.ledgers = ledger.blank()
+        self.start = time.perf_counter()
+        self.final: str | None = None
+        self.done = False
 
 
-@app.get("/api/agents")
-async def api_agents():
-    """Discover the orchestrator + every specialist by fetching their Agent
-    Cards, and attach each one's role & motivation (its 'why')."""
-    specialists = []
-    for s in SPECIALISTS:
-        entry = await _probe(s["key"], base_url(s["port"]))
-        entry["role"], entry["motivation"] = s["role"], s["motivation"]
-        specialists.append(entry)
-    orchestrator = await _probe(ORCHESTRATOR_AGENT["key"], orchestrator_url())
-    orchestrator["role"] = "Orchestrator (host agent)"
-    orchestrator["motivation"] = "Coordinate the specialists into one coherent plan"
-    return JSONResponse({"orchestrator": orchestrator, "agents": specialists})
+def create_app(runtime) -> FastAPI:
+    store.init_db()
+    app = FastAPI(title="ATLAS — organisation-of-agents gateway")
+    runs: dict[str, RunState] = {}
+    app.state.runtime = runtime
+    app.state.runs = runs
 
+    async def emit(rs: RunState, ev: dict) -> None:
+        rs.seq += 1
+        ev = {**ev, "seq": rs.seq, "ts": now_iso()}
+        rs.events.append(ev)
+        rs.org.apply(ev)
+        rs.metrics.apply(ev)
+        ledger.apply(rs.ledgers, ev)
+        if ev.get("type") == "ledger":
+            store.save_ledgers(rs.run_id, rs.ledgers["task"], rs.ledgers["progress"])
+        store.add_event(rs.run_id, ev["seq"], ev["ts"], ev)
+        for q in list(rs.subscribers):
+            q.put_nowait(ev)
 
-@app.get("/api/conversation")
-async def api_conversation(contextId: str = ""):
-    """Return a conversation's remembered state so the UI can restore it after a
-    refresh (and the user's long-term preferences)."""
-    conv = memory.load_conversation(contextId) if contextId else None
-    turns = memory.load_turns(contextId) if contextId else []
-    return JSONResponse({
-        "contextId": contextId,
-        "exists": conv is not None,
-        "beliefs": (conv or {}).get("beliefs"),
-        "intent": (conv or {}).get("intent"),
-        "turns": [{"request": t["request"]} for t in turns],
-        "lastPlan": turns[-1]["plan"] if turns else None,
-        "preferences": memory.load_user_memory(),
-    })
+    # ---- status -----------------------------------------------------------
+    @app.get("/api/status")
+    async def api_status():
+        return JSONResponse({
+            "usingRealLLM": using_real_llm(), "model": model_name(),
+            "company": config.COMPANY_NAME, "runtime": config.RUNTIME,
+            "caps": {"headcount": config.MAX_HEADCOUNT,
+                     "depth": config.MAX_DELEGATION_DEPTH,
+                     "tokenBudget": config.TOKEN_BUDGET},
+            "poolSize": len(runtime.members())})
 
+    # ---- HR: allocate a free employee ------------------------------------
+    @app.post("/hr/allocate")
+    async def hr_allocate(request: Request):
+        body = await request.json()
+        run_id = body.get("runId")
+        role = body.get("roleHint", "Specialist")
+        requester = body.get("requester", "?")
+        depth = int(body.get("depth", 0) or 0)
+        res = await asyncio.to_thread(runtime.allocate, run_id, role, requester, depth)
+        rs = runs.get(run_id)
+        if res and rs:
+            await emit(rs, {"type": "hire", "agentId": res["agentId"], "role": role,
+                            "parentId": requester, "depth": depth})
+            return JSONResponse(res)
+        return JSONResponse({})               # at capacity / unknown run
 
-@app.post("/api/reset")
-async def api_reset(request: Request):
-    """Forget one conversation and hand back a fresh contextId (a 'New trip').
-    Long-term user preferences are intentionally kept."""
-    body = await request.json()
-    cid = (body.get("contextId") or "").strip()
-    if cid:
-        memory.reset_conversation(cid)
-    return JSONResponse({"contextId": memory.new_context_id()})
+    # ---- HR: Contract-Net auction support --------------------------------
+    @app.post("/hr/candidates")
+    async def hr_candidates(request: Request):
+        """Reserve up to k free employees for an auction (the manager interviews
+        them with a cfp, then releases the losers)."""
+        body = await request.json()
+        cands = await asyncio.to_thread(runtime.reserve_candidates,
+                                        body.get("runId"), int(body.get("k", 2)))
+        return JSONResponse({"candidates": cands})
 
+    @app.post("/hr/release")
+    async def hr_release(request: Request):
+        body = await request.json()
+        runtime.release(body.get("agentId"))
+        return JSONResponse({"ok": True})
 
-@app.post("/api/plan")
-async def api_plan(request: Request):
-    """Run the orchestrator and stream its events to the browser as SSE."""
-    body = await request.json()
-    user_request = (body.get("request") or "").strip()
-    # The conversation id: reuse what the browser sends, else start a new one.
-    context_id = (body.get("contextId") or "").strip() or memory.new_context_id()
+    # ---- telemetry ingest -------------------------------------------------
+    @app.post("/api/ingest")
+    async def api_ingest(request: Request):
+        ev = await request.json()
+        rs = runs.get(ev.get("runId"))
+        if rs and not rs.done:
+            await emit(rs, ev)
+        return JSONResponse({"ok": True})
 
-    queue: asyncio.Queue = asyncio.Queue()
+    # Provisioning can block (the dynamic runtime spawns a process); offload it
+    # so the gateway event loop keeps serving telemetry while a hire spins up.
+    async def alloc_async(run_id, role_hint="", requester="", depth=0):
+        return await asyncio.to_thread(runtime.allocate, run_id, role_hint, requester, depth)
 
-    async def emit(event: dict) -> None:
-        await queue.put(event)
-
-    async def run() -> None:
+    # ---- the shared run driver -------------------------------------------
+    async def drive(rs: RunState) -> None:
+        await emit(rs, {"type": "run", "phase": "started", "mission": rs.mission,
+                        "topology": rs.topology})
         try:
-            await plan_trip(user_request, emit, context_id=context_id)
-        except Exception as exc:
-            await queue.put({"type": "error", "message": str(exc)})
-        finally:
-            await queue.put(None)  # sentinel: tells the generator to stop
+            final = await ceo.run_mission(alloc_async, lambda ev: emit(rs, ev),
+                                          run_id=rs.run_id, mission=rs.mission,
+                                          context_id=rs.context_id, topology=rs.topology)
+        except Exception as exc:                           # noqa: BLE001
+            final = f"(run failed: {exc})"
+        rs.final = final
+        rs.metrics.set_elapsed((time.perf_counter() - rs.start) * 1000)
+        rs.done = True
+        store.finish_run(rs.run_id, final)
+        await emit(rs, {"type": "run", "phase": "done", "final": final,
+                        "metrics": rs.metrics.snapshot()})
+        for m in runtime.members():
+            if m["runId"] == rs.run_id:
+                runtime.release(m["agentId"])
 
-    async def event_generator():
-        task = asyncio.create_task(run())
-        try:
-            while True:
-                event = await queue.get()
-                if event is None:
-                    break
-                yield f"data: {json.dumps(event)}\n\n"
-            yield 'data: {"type": "done"}\n\n'
-        finally:
-            if not task.done():
-                task.cancel()
+    def _new_run(mission: str, topology: str) -> RunState:
+        run_id = new_id("run")
+        rs = RunState(run_id, mission, topology)
+        runs[run_id] = rs
+        store.create_run(run_id, mission, topology, now_iso())
+        return rs
 
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    # ---- start a single mission ------------------------------------------
+    @app.post("/api/plan")
+    @app.post("/api/run")
+    async def api_run(request: Request):
+        body = await request.json()
+        mission = (body.get("mission") or body.get("request") or config.DEFAULT_MISSION).strip()
+        rs = _new_run(mission, body.get("topology", "hierarchical"))
+        asyncio.create_task(drive(rs))
+        return JSONResponse({"runId": rs.run_id, "contextId": rs.context_id})
+
+    # ---- compare topologies on the SAME mission --------------------------
+    @app.post("/api/compare")
+    async def api_compare(request: Request):
+        body = await request.json()
+        mission = (body.get("mission") or body.get("request") or config.DEFAULT_MISSION).strip()
+        topos = body.get("topologies") or ["hierarchical", "mesh", "group"]
+        created = [_new_run(mission, t) for t in topos]
+
+        async def drive_all():
+            from llm.client import set_force_mock
+            set_force_mock(True)               # deterministic => apples-to-apples
+            try:
+                for rs in created:             # sequential: they share the pool
+                    await drive(rs)
+            finally:
+                set_force_mock(False)
+
+        asyncio.create_task(drive_all())
+        return JSONResponse({"mission": mission,
+                             "runs": [{"topology": rs.topology, "runId": rs.run_id}
+                                      for rs in created]})
+
+    # ---- live event stream (SSE) -----------------------------------------
+    @app.get("/api/stream")
+    async def api_stream(run: str):
+        rs = runs.get(run)
+        if rs is None:
+            return JSONResponse({"error": "unknown run"}, status_code=404)
+
+        async def gen():
+            q: asyncio.Queue = asyncio.Queue()
+            rs.subscribers.add(q)
+            backlog = list(rs.events)
+            last = backlog[-1]["seq"] if backlog else 0
+            for ev in backlog:
+                yield f"data: {json.dumps(ev)}\n\n"
+            if rs.done:
+                rs.subscribers.discard(q)
+                return
+            try:
+                while True:
+                    ev = await q.get()
+                    if ev["seq"] <= last:
+                        continue
+                    yield f"data: {json.dumps(ev)}\n\n"
+                    if ev.get("type") == "run" and ev.get("phase") in ("done", "error"):
+                        break
+            finally:
+                rs.subscribers.discard(q)
+
+        return StreamingResponse(gen(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "Connection": "keep-alive",
+                                          "X-Accel-Buffering": "no"})
+
+    # ---- snapshots (for restore / the comparison view) -------------------
+    @app.get("/api/agents")
+    async def api_agents(run: str = ""):
+        rs = runs.get(run)
+        return JSONResponse({"org": rs.org.snapshot() if rs else {},
+                             "pool": runtime.members()})
+
+    @app.get("/api/run-state")
+    async def api_run_state(run: str = ""):
+        rs = runs.get(run)
+        if rs is None:
+            return JSONResponse({"exists": bool(store.get_run(run)),
+                                 "run": store.get_run(run),
+                                 "ledgers": store.load_ledgers(run),
+                                 "events": store.load_events(run)})
+        return JSONResponse({"exists": True, "mission": rs.mission, "topology": rs.topology,
+                             "status": "done" if rs.done else "running", "final": rs.final,
+                             "metrics": rs.metrics.snapshot(), "ledgers": rs.ledgers,
+                             "org": rs.org.snapshot()})
+
+    # static SPA last, so /api/* and /hr/* win
+    if WEB_DIR.exists():
+        app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
+    return app
 
 
-# Serve the static single-page app at "/" (registered LAST so the /api routes
-# above take precedence over the catch-all static mount).
-app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
+def main() -> None:
+    from org.runtime import make_runtime
+    import uvicorn
+    rt = make_runtime()
+    rt.start()
+    app = create_app(rt)
+    uvicorn.run(app, host=config.HOST, port=config.GATEWAY_PORT, log_level="warning")
 
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=GATEWAY_PORT, log_level="warning")
+    main()

@@ -3,138 +3,112 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ATLAS · A2A Trip Concierge</title>
+  <title>ATLAS · Organisation of Agents</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <div class="grain" aria-hidden="true"></div>
   <div class="aurora" aria-hidden="true"></div>
 
-  <!-- ===================== HEADER ===================== -->
   <header class="topbar">
     <div class="brand">
       <span class="mark">✦</span>
       <div class="brand-text">
         <h1>ATLAS</h1>
-        <p>A2A Trip Concierge</p>
+        <p>Organisation of Agents</p>
       </div>
     </div>
     <div class="topbar-right">
       <span class="proto-tag">A2A · JSON-RPC 0.3.0</span>
-      <span id="mcp-badge" class="llm-badge loading">MCP…</span>
-      <span id="llm-badge" class="llm-badge loading">connecting…</span>
+      <span id="llm-badge" class="llm-badge">connecting…</span>
     </div>
   </header>
 
   <main>
-    <!-- ===================== CONSOLE / INPUT ===================== -->
-    <section class="console panel reveal" style="--d:0">
-      <div class="console-top">
-        <label class="console-label" for="request">Where shall we go?</label>
-        <button id="new-trip" class="ghost-btn" type="button" hidden>＋ New trip</button>
-      </div>
-      <form id="plan-form" class="console-form">
-        <textarea id="request" rows="2"
-          placeholder="e.g. Plan a 5-day food and temples trip to Kyoto"></textarea>
-        <button id="go" type="submit">
-          <span class="go-label">Plan my trip</span>
-          <span class="go-arrow">➜</span>
-        </button>
+    <!-- console -->
+    <section class="panel console reveal" style="--d:0">
+      <label class="console-label" for="mission">Give the organisation a mission</label>
+      <form id="run-form" class="console-form">
+        <textarea id="mission" rows="2"
+          placeholder="e.g. Design and spec a privacy-first smart doorbell"></textarea>
+        <select id="topology" title="communication topology">
+          <option value="hierarchical">Hierarchical</option>
+          <option value="mesh">Mesh · peer-to-peer</option>
+          <option value="group">Group · meetings</option>
+          <option value="compare">Compare all three</option>
+        </select>
+        <button id="go" type="submit"><span class="go-label">Start mission</span><span class="go-arrow">➜</span></button>
       </form>
       <div class="chips" id="examples"></div>
+      <div class="caps" id="caps"></div>
     </section>
 
-    <!-- ===================== CONVERSATION MEMORY ===================== -->
-    <section class="panel memory-panel" id="memory-panel" hidden>
+    <!-- live metrics -->
+    <section class="metrics reveal" id="metrics" style="--d:1" hidden>
+      <div class="metric"><span class="m-val" id="m-messages">0</span><span class="m-key">messages</span></div>
+      <div class="metric"><span class="m-val" id="m-headcount">0</span><span class="m-key">headcount</span></div>
+      <div class="metric"><span class="m-val" id="m-depth">0</span><span class="m-key">max depth</span></div>
+      <div class="metric"><span class="m-val" id="m-tokens">0</span><span class="m-key">tokens</span></div>
+      <div class="metric"><span class="m-val" id="m-elapsed">0.0s</span><span class="m-key">elapsed</span></div>
+    </section>
+
+    <!-- topology comparison -->
+    <section class="panel compare-panel reveal" id="compare-panel" style="--d:1" hidden>
       <div class="panel-head">
-        <h2>Conversation Memory</h2>
-        <span class="hint">what the host remembers &amp; what it's trying to do</span>
+        <h2>Topology comparison</h2>
+        <span class="hint">same mission &amp; same hired team — only the communication pattern differs</span>
       </div>
-      <div class="memory-grid">
-        <div class="mem-col">
-          <h3>Goal <span class="mem-tag">intent</span></h3>
-          <p id="mem-goal" class="mem-goal">—</p>
-          <h3>Understanding <span class="mem-tag">beliefs</span></h3>
-          <div id="mem-beliefs" class="mem-chips"></div>
-        </div>
-        <div class="mem-col">
-          <h3>Remembered about you <span class="mem-tag">persists across trips</span></h3>
-          <div id="mem-prefs" class="mem-chips"><span class="mem-empty">nothing yet</span></div>
-          <h3>This conversation</h3>
-          <ol id="mem-turns" class="mem-turns"></ol>
-        </div>
-      </div>
+      <div id="compare-grid"></div>
     </section>
 
-    <!-- ===================== STAGE: GRAPH + LOG ===================== -->
+    <!-- stage: org graph + protocol log -->
     <section class="stage">
-      <div class="panel graph-panel reveal" style="--d:1">
+      <div class="panel graph-panel reveal" style="--d:2">
         <div class="panel-head">
-          <h2>Agent Network</h2>
-          <span class="hint">live agent-to-agent calls</span>
+          <h2>Org chart</h2>
+          <span class="hint">the company grows as agents are hired &amp; onboarded</span>
         </div>
         <div class="canvas" id="canvas">
           <svg id="edges" preserveAspectRatio="none" aria-hidden="true"></svg>
-          <!-- node cards injected by app.js -->
+          <!-- nodes + packets injected by app.js -->
         </div>
-        <div class="legend">
-          <span><i class="pip idle"></i>idle</span>
-          <span><i class="pip contacted"></i>contacted</span>
-          <span><i class="pip working"></i>working</span>
-          <span><i class="pip done"></i>done</span>
-          <span class="legend-mcp"><i class="mcp-dash"></i>MCP tool call (not A2A)</span>
-          <span class="legend-mesh"><i class="mesh-dash"></i>mesh: agent → agent (A2A)</span>
-        </div>
+        <div class="legend" id="legend"></div>
       </div>
 
-      <div class="panel log-panel reveal" style="--d:2">
+      <div class="panel log-panel reveal" style="--d:3">
         <div class="panel-head">
-          <h2>A2A Protocol Log</h2>
-          <span class="hint">real JSON-RPC frames</span>
+          <h2>A2A protocol log</h2>
+          <span class="hint">every message, tagged with its performative</span>
         </div>
-        <div class="log" id="log">
-          <div class="log-empty">The wire is quiet. Send a request to watch the
-            agents talk to each other.</div>
+        <div class="log" id="log"><div class="log-empty">The wire is quiet. Start a mission.</div></div>
+      </div>
+    </section>
+
+    <!-- shared ledgers -->
+    <section class="panel ledger-panel reveal" id="ledger-panel" hidden>
+      <div class="panel-head"><h2>Shared ledgers</h2><span class="hint">the org's task + progress brain</span></div>
+      <div class="ledgers">
+        <div class="ledger-col">
+          <h3>Task ledger</h3>
+          <p class="l-plan" id="l-plan">—</p>
+          <ul class="l-facts" id="l-facts"></ul>
+        </div>
+        <div class="ledger-col">
+          <h3>Progress ledger</h3>
+          <ul class="l-steps" id="l-steps"></ul>
         </div>
       </div>
     </section>
 
-    <!-- ===================== DISCOVERED AGENTS (CARDS) ===================== -->
-    <section class="panel discovery reveal" style="--d:3">
-      <div class="panel-head">
-        <h2>Discovered Agents</h2>
-        <span class="hint">from each agent's <code>/.well-known/agent-card.json</code></span>
-      </div>
-      <div class="agent-cards" id="agent-cards"></div>
-    </section>
-
-    <!-- ===================== AGENT RESPONSES ===================== -->
-    <section class="responses" id="responses" hidden>
-      <div class="panel-head section-head">
-        <h2>Agent Responses</h2>
-        <span class="hint">artifacts returned by each specialist</span>
-      </div>
-      <div class="response-grid" id="response-grid"></div>
-    </section>
-
-    <!-- ===================== ROUND-TABLE NEGOTIATION ===================== -->
-    <section class="panel negotiation-panel" id="negotiation" hidden>
-      <div class="panel-head">
-        <h2>Agent Round-Table</h2>
-        <span class="hint">the specialists negotiate over A2A — in their own words</span>
-      </div>
-      <div class="nego-thread" id="nego-thread"></div>
-    </section>
-
-    <!-- ===================== FINAL PLAN ===================== -->
-    <section class="final-wrap" id="final" hidden>
+    <!-- final result: boarding pass -->
+    <section class="final-wrap reveal" id="final-panel" hidden>
       <div class="boarding-pass">
         <div class="bp-stub">
           <span class="bp-label">ATLAS</span>
-          <span class="bp-route" id="bp-route">YOUR TRIP</span>
-          <span class="bp-sub">synthesised by the host agent</span>
+          <span class="bp-route" id="bp-route">RESULT</span>
+          <span class="bp-sub">delivered by the organisation</span>
         </div>
-        <div class="bp-body markdown" id="final-body"></div>
+        <div class="bp-body markdown" id="final"></div>
       </div>
     </section>
   </main>
