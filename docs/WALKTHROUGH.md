@@ -1,201 +1,149 @@
-# Walkthrough — run it and read the protocol live
+# Walkthrough — your first ATLAS run
 
-A guided first run. By the end you'll have watched real agent‑to‑agent messages
-fly and be able to read them yourself.
-
----
-
-## 0. Pre‑flight (once)
-
-```powershell
-# from the project folder
-copy .env.example .env          # then paste your Groq key into .env
-.\.venv\Scripts\python -m pip install -r requirements.txt   # if not already done
-```
-
-No Groq key? You can still do the whole walkthrough — the app runs in **offline
-mock mode** and the badge will say so.
+Welcome! This is the "just show me" doc. We'll start the app, watch one mission
+unfold in the UI, then run the test scripts so you trust what you saw. No prior
+A2A knowledge needed — though if you want the *why*, read the other three docs in
+`docs/` after this.
 
 ---
 
-## 1. Start everything
+## Step 1 — Start it
 
-```powershell
-.\.venv\Scripts\python launch.py
+From the project root:
+
+```bash
+python launch.py
 ```
 
-You'll see each agent come up, then your browser opens at
-**http://127.0.0.1:8000**. Leave this terminal open; **Ctrl+C** stops everything.
+That single command pre-warms the employee pool, starts the gateway, and opens
+your browser at **http://127.0.0.1:8000**. You'll see a banner like:
 
-On screen, before you do anything:
+```
+============================================================
+  ATLAS - an organisation of communicating A2A agents
+============================================================
+  pre-warming 8 employees (pooled runtime)...
+  gateway live -> http://127.0.0.1:8000/
+  caps: headcount <= 12 | depth <= 3 | budget 150,000 tokens
+  Ctrl+C to stop.
+```
 
-![idle UI](images/ui-initial.png)
-
-- **Top‑right badges** tell you the mode: `Groq · llama‑3.3‑70b‑versatile` (or
-  `offline mock`) and `MCP tool ✓` (the live weather tool server).
-- **Agent Network**: the `You → Host Agent → 4 specialists` graph, plus a dashed
-  **violet** link from the Weather agent to a `🔧 Weather API` **MCP tool** node.
-  All *idle* until you send a request.
-- **Discovered Agents** (bottom): the **orchestrator's own** Agent Card (badged
-  **HOST**) plus the four specialist cards, fetched live from each
-  `/.well-known/agent-card.json`. Click **▸ agent-card.json** to see the raw JSON.
+**No API key needed.** With no key, ATLAS runs on a **deterministic offline
+mock** — perfect for demos and the tests, and reproducible run-to-run. Want a
+real LLM? Copy `.env.example` to `.env` and add a `GROQ_API_KEY`; the badge in the
+UI's top-right will switch from `deterministic-mock` to the model name.
 
 ---
 
-## 2. Plan a trip
+## Step 2 — Give the organisation a mission
 
-Type a request (or click an example chip), e.g.:
+In the console at the top of the page:
 
-> *Plan a 4‑day art and food trip to Florence*
+1. Type a mission (or use the placeholder, *"Design and spec a privacy-first
+   smart doorbell"*).
+2. Pick a **topology** from the selector:
+   - **Hierarchical** — 1:1 delegation, in parallel.
+   - **Mesh (peer-to-peer)** — reports also consult each other.
+   - **Group (meetings)** — a round-robin meeting on one shared thread.
+   - **Compare all three** — runs the same mission three ways, side by side.
+3. Click **Start mission →**.
 
-Hit **Plan my trip** and watch the network update together:
-
-![mid‑run](images/ui-working.png)
-
-1. The **Host Agent** turns amber (`parsing`), then the specialist nodes go
-   `ready` → `working` (pulsing) → `done` (green).
-2. When the **Weather** agent runs, the dashed **violet** link to the `🔧 Weather
-   API` tool lights up — that's the **MCP** call fetching a live forecast.
-3. The **A2A Protocol Log** fills with the *actual* JSON‑RPC frames.
-4. Each **Agent Response** card fills in with that specialist's answer.
-5. Finally the **boarding‑pass trip plan** appears — the host's synthesis (its
-   Weather section uses the *real* numbers the MCP tool returned).
-
-When it's finished, every node is green, and the **Conversation Memory** panel
-now shows the goal, the beliefs, and what it remembered about you.
+Under the hood the browser calls `POST /api/run` (or `POST /api/compare` for
+compare), then subscribes to the live event stream at `/api/stream`.
 
 ---
 
-## 2½. Ask a follow‑up (multi‑turn memory)
+## Step 3 — What you're watching
 
-Now type a follow‑up into the *same* box, e.g.:
+The page comes alive as telemetry streams in. Here's each panel:
 
-> *Make it budget and add 2 more days*
+```
+┌───────────────────────────────────────────────────────────┐
+│  metrics:  messages · headcount · max depth · tokens · time│
+├──────────────────────────┬────────────────────────────────┤
+│  Org chart               │  A2A protocol log              │
+│  (grows as agents hired) │  (every message + performative)│
+├──────────────────────────┴────────────────────────────────┤
+│  Shared ledgers:  Task ledger  |  Progress ledger          │
+├───────────────────────────────────────────────────────────┤
+│  Result  (the org's synthesised answer)                    │
+└───────────────────────────────────────────────────────────┘
+```
 
-Watch what happens — this is the memory/intent layer:
+- **Metrics bar** — live counts of `messages`, `headcount`, `max depth`,
+  `tokens`, and `elapsed`. Watch messages climb as the org coordinates.
+- **Org chart** — starts empty ("No agents yet"), then grows: the **CEO** appears
+  first (hired by the Board), then its reports, then any sub-team. Each node shows
+  a role and updates its status as it works.
+- **A2A protocol log** — the star of the show. Every message on the wire, tagged
+  with its **performative**. You'll watch the handshake in order:
+  `propose` (onboard the CEO) → `accept-proposal` → `request` (the mission) →
+  `cfp` → `propose` (bids) → `accept-proposal` / `refuse` (the auction) →
+  `request` (sub-tasks) → `inform` (results).
+- **Shared ledgers** — the **Task ledger** (the plan + facts the CEO wrote when it
+  decomposed) and the **Progress ledger** (a row per delegated step: who, doing
+  what, status).
+- **Result** — when the run finishes (`run:done`), the org's synthesised answer
+  renders here as Markdown.
 
-![Conversation memory](images/ui-memory.png)
-
-- The **beliefs** update (days `5 → 7`, style `→ budget`) — it *remembered* Kyoto
-  and your interests instead of starting over.
-- The log shows **`Coordination → running … · reusing cached: …`**: only the
-  affected agents re‑run; the rest show **“reused (cached)”** in violet.
-- Anything durable it learned (e.g. *“enjoys food”*) lands under **Remembered
-  about you** and survives even a server restart.
-
-Hit **＋ New trip** to start a fresh conversation (your preferences are kept).
+If you chose **Compare all three**, a comparison panel shows the three runs
+side-by-side — *same mission, same hired team, only the communication pattern
+differs* — so you can see mesh chat more and group take longer. (Compare forces
+the deterministic mock so the comparison is fair; see
+`COMMUNICATION_PATTERNS.md`.)
 
 ---
 
-## 3. Read the Protocol Log (the whole point)
+## Step 4 — Verify with the scripts
 
-The log is a live transcript of the A2A conversation. Here's how to read the key
-lines:
+The UI is the *experience*; the scripts are the *proof*. They each set
+`ATLAS_FORCE_MOCK=1`, so they need no API key and run deterministically. Run them
+from the project root.
 
-**Discovery** — the host learned each agent's capabilities from its card:
-```
-host  Discovered 4 agents via their /.well-known/agent-card.json
-      [ { "name": "Destination Expert", "url": "http://127.0.0.1:8101/",
-          "skills": ["destination_overview"] }, ... ]
-```
+### The acceptance run — `demo_mission.py`
 
-**Delegation** — the host opens a streaming task on a specialist:
-```
-destination  Host → Destination Expert   message/stream: "Tell me about Florence ..."
+```bash
+python scripts/demo_mission.py
 ```
 
-**Streaming events** — the specialist's task lifecycle, one frame each:
-```
-destination  task            · state=submitted
-destination  status-update   · state=working · "Researching the destination..."
-destination  artifact-update · 945 chars
-destination  status-update   · state=completed · final
-```
-That `final` flag on the last frame is how the client knows the task is done.
+Run this one first. It runs the mission under **all three topologies**
+(deterministic mock — no key needed) and prints a readable report: the org tree
+it built, the performative counts, and a checklist that **verifies** the
+handshakes you watched in the UI —
 
-**Synthesis & finish**:
-```
-host  Combining all agent responses into one trip plan…
-host  Final trip plan ready ✓
-```
+- onboarding `propose -> accept-proposal`;
+- the hiring auction `cfp -> propose -> accept-proposal -> refuse`;
+- delegation `request -> inform`;
+- mesh peer consults (`query-ref`) and group meeting contexts;
+- recursion — a report became a sub-manager (`depth >= 2`);
+- caps respected, and the **identical team** hired across all three topologies.
 
-> 💡 Notice the four specialists interleave — they're running **in parallel**,
-> so you'll often see `itinerary working` between two `budget` frames. Watch for
-> the Weather agent's `Calling weather tool via MCP…` note too.
+Ends with `ALL CHECKS PASSED`. (`scripts/smoke_org.py` is the same idea for a
+single run if you want something shorter.)
+
+### The other smoke scripts and what each proves
+
+| Script                          | What it proves                                                                                   |
+| ------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `scripts/demo_mission.py`       | **The acceptance run** (above): all three topologies + the full performative-handoff checklist + determinism. Run this first. |
+| `scripts/smoke_protocol.py`     | The **pure A2A layer**, no org code. Calls the FastAPI app in-process (no server): Agent Card discovery, `message/send`, `message/stream` (SSE), and an `input-required` pause. Confirms `protocolVersion` `0.3.0`. |
+| `scripts/smoke_org.py`          | The **end-to-end org run** (above): completion, metrics, the performative handoffs, the org tree.|
+| `scripts/smoke_topologies.py`   | Runs the same mission under **all three topologies** and asserts the key claim: **same team, different conversations** — identical roles/headcount, but mesh has peer consults (`query-ref > 0`) and chats more, and group holds meetings + opens extra contexts. |
+| `scripts/smoke_compare.py`      | Exercises the **`/api/compare`** endpoint: three runs kick off, all complete, compose the **identical** team (determinism held), and the metric deltas are present (mesh > hierarchical messages). |
+| `scripts/smoke_dynamic.py`      | Proves the **dynamic runtime** (`ATLAS_RUNTIME=dynamic`): a mission completes over genuinely **separate OS processes** per hire (not threads), with `>= 2` real processes spawned. |
+
+A good first session: run `smoke_protocol.py` (see the protocol is real), then
+`smoke_org.py` (see the org is real), then `smoke_topologies.py` (see the
+topologies differ). Together they walk you from "this is genuine A2A" up to "and
+here is the organisation we built on top."
 
 ---
 
-## 4. Same thing, in the terminal
+## Where to go next
 
-Want it headless? With the agents still running (from `launch.py`), open another
-terminal:
+- **"Is this really A2A?"** → `docs/A2A_CORE_vs_ORG_EXTENSIONS.md`
+- **"What are all these processes and ports?"** → `docs/ARCHITECTURE.md`
+- **"What do the performatives and topologies mean?"** →
+  `docs/COMMUNICATION_PATTERNS.md`
 
-```powershell
-.\.venv\Scripts\python cli.py "7 budget days backpacking Vietnam"
-```
-
-You'll get the same orchestration, printed as a colourised log, ending with the
-final plan rendered as Markdown.
-
----
-
-## 5. See the raw wire format
-
-For the clearest possible look at A2A, run:
-
-```powershell
-.\.venv\Scripts\python show_protocol.py
-```
-
-It makes three raw HTTP calls to one agent and prints the exact JSON:
-
-1. **Discovery** — the full Agent Card.
-2. **`message/send`** — prints the request you POST *and* the Task you get back.
-3. **`message/stream`** — prints each SSE frame as it arrives.
-
-Read that output next to [`common/a2a.py`](../common/a2a.py) and the protocol
-will “click”.
-
----
-
-## 6. Hire the whole crew as one agent (composition)
-
-The orchestrator is itself an A2A agent. Call it directly:
-
-```powershell
-.\.venv\Scripts\python show_composition.py "Plan a 5-day food trip to Kyoto"
-```
-
-You make **one** A2A call; it coordinates the four specialists internally and
-returns the finished plan. More: [MCP_AND_COMPOSITION.md](MCP_AND_COMPOSITION.md).
-
----
-
-## 7. Things to try
-
-- **Click “▸ agent-card.json”** on a discovered‑agent card — that JSON *is* A2A
-  discovery. Try the **HOST** card too: the orchestrator advertises a `plan_trip` skill.
-- **Stop one agent** (kill port 8102) and plan again: the host reports it
-  unavailable but still finishes with the other three (graceful degradation).
-- **Stop the MCP server** (kill port 8200): the Weather agent can't fetch live
-  data, so it gives general seasonal guidance — the plan still completes, and the
-  badge shows `MCP tool offline`.
-- **Switch models**: set `GROQ_MODEL=llama-3.1-8b-instant` in `.env` — faster.
-- **Force mock mode** (set `ATLAS_FORCE_MOCK=1`, no need to touch `.env`) and
-  re‑run: identical A2A + MCP flow, now with labelled mock answers — proof the
-  protocol/tool and the “brain” are separate (the weather forecast stays *real*,
-  because Open‑Meteo needs no key).
-- **Memory survives a restart**: after a couple of turns, **Ctrl+C** the launcher,
-  run `python launch.py` again, and reload the page — your conversation and
-  remembered preferences come back (they're in `data/atlas.db`).
-- **Efficient follow‑ups**: ask *“make it cheaper”* — only Budget + Itinerary
-  re‑run; the others say *“reused (cached)”*. (Delete `data/atlas.db` to wipe all memory.)
-- **Multi‑turn in the terminal**: `python cli.py "5-day trip to Lisbon"` then type
-  follow‑ups at the prompt — same conversation, with memory.
-- **Add a fifth agent** following [ARCHITECTURE.md](ARCHITECTURE.md#extending-it-add-a-5th-specialist).
-
----
-
-Next: the concepts in [A2A_EXPLAINED.md](A2A_EXPLAINED.md) · memory & intent in
-[MEMORY_AND_INTENT.md](MEMORY_AND_INTENT.md) · the code map in
-[ARCHITECTURE.md](ARCHITECTURE.md).
+Stop everything with **Ctrl+C** in the terminal running `launch.py`.
