@@ -17,11 +17,12 @@ const EXAMPLES = [
 const NODES = [
   { id: "you",         role: "Client",              name: "You",         x: 10, y: 50, cls: "you" },
   { id: "host",        role: "Orchestrator · 8100", name: "Host Agent",  x: 34, y: 50, cls: "host" },
-  { id: "destination", role: "A2A Agent · 8101",    name: "Destination", x: 62, y: 13, cls: "spec" },
-  { id: "itinerary",   role: "A2A Agent · 8102",    name: "Itinerary",   x: 62, y: 38, cls: "spec" },
-  { id: "budget",      role: "A2A Agent · 8103",    name: "Budget",      x: 62, y: 63, cls: "spec" },
-  { id: "weather",     role: "A2A Agent · 8104",    name: "Weather",     x: 62, y: 88, cls: "spec" },
-  { id: "mcp",         role: "MCP Tool · 8200",     name: "Weather API", x: 88, y: 88, cls: "tool" },
+  { id: "destination", role: "A2A Agent · 8101",    name: "Destination", x: 62, y: 8,  cls: "spec" },
+  { id: "itinerary",   role: "A2A Agent · 8102",    name: "Itinerary",   x: 62, y: 28, cls: "spec" },
+  { id: "budget",      role: "A2A Agent · 8103",    name: "Budget",      x: 62, y: 48, cls: "spec" },
+  { id: "weather",     role: "A2A Agent · 8104",    name: "Weather",     x: 62, y: 68, cls: "spec" },
+  { id: "cuisine",     role: "A2A Agent · 8105",    name: "Cuisine",     x: 62, y: 88, cls: "spec" },
+  { id: "mcp",         role: "MCP Tool · 8200",     name: "Weather API", x: 88, y: 68, cls: "tool" },
 ];
 const EDGES = [
   { id: "you",         from: "you",     to: "host" },
@@ -29,10 +30,17 @@ const EDGES = [
   { id: "itinerary",   from: "host",    to: "itinerary" },
   { id: "budget",      from: "host",    to: "budget" },
   { id: "weather",     from: "host",    to: "weather" },
+  { id: "cuisine",     from: "host",    to: "cuisine" },
   { id: "mcp",         from: "weather", to: "mcp", kind: "mcp" },   // MCP, not A2A
 ];
 
-const SPECIALIST_KEYS = ["destination", "itinerary", "budget", "weather"];
+const SPECIALIST_KEYS = ["destination", "itinerary", "budget", "weather", "cuisine"];
+// Each specialist's persona accent colour (used for the round-table bubbles).
+const PERSONA_COLOR = {
+  destination: "var(--teal)", itinerary: "var(--amber-soft)", budget: "var(--coral)",
+  weather: "var(--violet)", cuisine: "var(--green)",
+};
+const shortName = (n) => String(n || "").split(" · ")[0];
 const AGENTS = {};            // key -> {name, card, url}
 const nodeEls = {};           // id -> element
 const edgeEls = {};           // id -> {g, base, flow, packet}
@@ -382,13 +390,34 @@ function fillResponseCard(key, text) {
   card.querySelector(".rcard-body").innerHTML = mdToHtml(text);
 }
 
+/* ============================================ ROUND-TABLE NEGOTIATION (UI) */
+function addNegoBubble(ev) {
+  const thread = $("#nego-thread");
+  const color = PERSONA_COLOR[ev.speaker] || "var(--muted)";
+  const bubble = el("div", "nego-bubble");
+  bubble.style.borderLeftColor = color;
+  bubble.innerHTML =
+    `<div class="nego-meta">
+       <span class="nego-name" style="color:${color}">${escapeHtml(ev.speakerName)}</span>
+       <span class="nego-perf">${escapeHtml(ev.performative)}</span>
+     </div>
+     <div class="nego-text">${escapeHtml(ev.text)}</div>`;
+  thread.appendChild(bubble);
+  $("#negotiation").hidden = false;
+  bubble.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
 /* ================================================================ THE RUN */
 let running = false;
+let negotiating = false;     // true while the round-table is in progress
 
 function resetRun() {
   $("#log").innerHTML = "";
   $("#responses").hidden = true;
   $("#response-grid").innerHTML = "";
+  $("#negotiation").hidden = true;
+  $("#nego-thread").innerHTML = "";
+  negotiating = false;
   $("#final").hidden = true;
   for (const k in responseCards) delete responseCards[k];
   NODES.forEach((n) => setNode(n.id, "", "idle"));
@@ -496,7 +525,9 @@ function handleEvent(ev) {
       } else if (kind === "artifact-update") {
         const text = e.artifact.parts.map((p) => p.text).join("");
         msg += ` &middot; ${text.length} chars`;
-        fillResponseCard(ev.agent, text);
+        // During the round-table the artifact is a short spoken line — it goes in
+        // the negotiation thread, NOT over the agent's full answer card.
+        if (!negotiating) fillResponseCard(ev.agent, text);
       }
       logRow({ tag: ev.agent, tagClass: tagClassFor(ev.agent), msg, json: e });
       break;
@@ -517,6 +548,37 @@ function handleEvent(ev) {
       setEdge(ev.agent, false);
       logRow({ tag: ev.agent, tagClass: tagClassFor(ev.agent),
         msg: `<span style="color:var(--coral)">error: ${escapeHtml(ev.message)}</span>` });
+      break;
+
+    case "negotiate_start": {
+      negotiating = true;
+      $("#negotiation").hidden = false;
+      $("#nego-thread").innerHTML = "";
+      setNode("host", "working", "facilitating");
+      const who = (ev.participants || []).map((p) => escapeHtml(shortName(p.name))).join(", ");
+      logRow({ tag: "host", tagClass: "host",
+        msg: `Round-table over A2A — <span class="k">${who}</span> negotiate the trade-offs` });
+      break;
+    }
+
+    case "negotiate_turn": {
+      setNode(ev.speaker, "working", "speaking");
+      setEdge(ev.speaker, true, "amber");   // the A2A call host → speaker
+      const to = ev.listenerName ? ` &rarr; ${escapeHtml(shortName(ev.listenerName))}` : "";
+      logRow({ tag: ev.speaker, tagClass: tagClassFor(ev.speaker),
+        msg: `<strong>${escapeHtml(shortName(ev.speakerName))}</strong>${to} &middot; <em>${escapeHtml(ev.performative)}</em> &middot; <span class="k">message/stream</span>` });
+      break;
+    }
+
+    case "negotiate_said":
+      setNode(ev.speaker, "done", "spoke");
+      setEdge(ev.speaker, false);
+      addNegoBubble(ev);
+      break;
+
+    case "negotiate_end":
+      negotiating = false;
+      logRow({ tag: "host", tagClass: "host", msg: "Consensus reached ✓ — folding it into the plan" });
       break;
 
     case "synthesis_start":

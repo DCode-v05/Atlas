@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from common.a2a import AgentCard, AgentSkill, build_agent_app, run_agent
 from common.llm import chat
+from common.persona import persona_aware
 
 PORT = 8102
 
@@ -41,7 +42,7 @@ async def logic(user_text: str) -> str:
     return await chat(SYSTEM, user_text, tag="itinerary", max_tokens=1100)
 
 
-app = build_agent_app(CARD, logic, working_note="Drafting a day-by-day plan...")
+app = build_agent_app(CARD, persona_aware("itinerary", logic))
 
 if __name__ == "__main__":
     run_agent(app, PORT)

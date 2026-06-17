@@ -177,6 +177,22 @@ def _mock(tag: str, user: str, json_mode: bool) -> str:
                          f"Evening: dinner at a well-loved local place.")
         return "\n".join(lines)
 
+    if tag == "cuisine":
+        return (MOCK_BANNER +
+                f"### What to Eat in {dest}\n\n"
+                f"{dest} rewards hungry travelers, especially if you enjoy {interests}.\n\n"
+                f"**Must-try dishes**\n"
+                f"- **A signature local specialty** — the dish the city is known for.\n"
+                f"- **A hearty street-food staple** — cheap, quick, and everywhere.\n"
+                f"- **A regional comfort dish** — what locals eat at home.\n"
+                f"- **A sweet local treat** — save room for dessert.\n\n"
+                f"**Where to eat ({style})**\n"
+                f"- Markets and street stalls for the most authentic, affordable bites.\n"
+                f"- Neighbourhood spots away from the main sights for better value.\n\n"
+                f"**Dining tips**\n"
+                f"- Eat where you see a local crowd.\n"
+                f"- Learn how tipping works before you go.")
+
     if tag == "budget":
         per_day = {"budget": 70, "mid-range": 160, "luxury": 420}[style]
         total = per_day * days

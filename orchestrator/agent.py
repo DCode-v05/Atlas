@@ -92,6 +92,11 @@ async def logic(user_text: str, ctx):
             yield Progress(f"{event['agent'].title()} agent finished.")
         elif t == "agent_error":
             yield Progress(f"{event['agent'].title()} agent unavailable — continuing.")
+        elif t == "negotiate_start":
+            names = ", ".join(p["name"] for p in event["participants"])
+            yield Progress(f"Round-table: {names} discuss the trade-offs over A2A…")
+        elif t == "negotiate_said":
+            yield Progress(f"{event['speakerName']} ({event['performative']}): {event['text']}")
         elif t == "synthesis_start":
             yield Progress("Combining all responses into one plan…")
     await task

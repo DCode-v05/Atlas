@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from common.a2a import AgentCard, AgentSkill, build_agent_app, run_agent
 from common.llm import chat
+from common.persona import persona_aware
 
 PORT = 8101
 
@@ -44,8 +45,9 @@ async def logic(user_text: str) -> str:
     return await chat(SYSTEM, user_text, tag="destination")
 
 
-# Wrap the logic into a full A2A HTTP server.
-app = build_agent_app(CARD, logic, working_note="Researching the destination...")
+# Wrap the logic into a full A2A HTTP server. `persona_aware` gives this agent a
+# human voice and a negotiation mode (see common/persona.py) on top of its job.
+app = build_agent_app(CARD, persona_aware("destination", logic))
 
 if __name__ == "__main__":
     run_agent(app, PORT)

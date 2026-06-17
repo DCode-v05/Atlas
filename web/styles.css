@@ -435,6 +435,30 @@ main {
   background: var(--amber); border-radius: 4px; padding: 2px 6px;
 }
 .tag.weather { color: var(--violet); border-color: rgba(180,140,224,.45); }
+.tag.cuisine { color: var(--green); border-color: rgba(132,210,154,.45); }
+
+/* --- round-table negotiation --------------------------------------------- */
+.negotiation-panel { margin-top: 18px; }
+.nego-thread { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+.nego-bubble {
+  background: var(--ink-2); border: 1px solid var(--line);
+  border-left: 3px solid var(--muted); border-radius: 10px;
+  padding: 10px 14px; max-width: 760px;
+  animation: nego-in 0.35s ease both;
+}
+.nego-bubble:nth-child(even) { align-self: flex-end; }
+.nego-meta { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.nego-name { font-family: var(--mono); font-size: 12px; font-weight: 600; }
+.nego-perf {
+  font-family: var(--mono); font-size: 9px; letter-spacing: 1px;
+  text-transform: uppercase; color: var(--faint);
+  border: 1px solid var(--line-2); border-radius: 4px; padding: 1px 6px;
+}
+.nego-text { color: var(--cream); font-size: 14.5px; line-height: 1.5; }
+@keyframes nego-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 
 /* --- conversation memory + intent panel ---------------------------------- */
 .console-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }

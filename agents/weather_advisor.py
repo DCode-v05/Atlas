@@ -24,6 +24,7 @@ from mcp.client.streamable_http import streamablehttp_client
 
 from common.a2a import AgentCard, AgentSkill, Progress, build_agent_app, run_agent
 from common.llm import chat
+from common.persona import persona_aware
 
 PORT = 8104
 MCP_URL = "http://127.0.0.1:8200/mcp"   # the weather MCP server
@@ -113,7 +114,9 @@ async def logic(user_text: str):
     yield advice   # the final answer (plain string, yielded last)
 
 
-app = build_agent_app(CARD, logic)
+# `persona_aware` keeps the streaming MCP job for normal requests, and adds a
+# human voice + negotiation mode (see common/persona.py).
+app = build_agent_app(CARD, persona_aware("weather", logic))
 
 if __name__ == "__main__":
     run_agent(app, PORT)

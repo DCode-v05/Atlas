@@ -12,6 +12,7 @@ Ports:
     8102  Itinerary Planner      (A2A server agent)
     8103  Budget & Packing       (A2A server agent)
     8104  Weather Advisor        (A2A server agent; uses an MCP tool)
+    8105  Local Cuisine Expert   (A2A server agent)
     8200  Weather MCP Server     (MCP tool server, NOT an A2A agent)
 """
 from __future__ import annotations
@@ -57,6 +58,14 @@ SPECIALISTS: list[dict] = [
         "role": "Weather & packing advisor",
         "motivation": "Make sure the traveler packs right for real conditions",
         "intent": "Ground packing advice in a live weather forecast",
+    },
+    {
+        "key": "cuisine",
+        "module": "agents.cuisine_expert",
+        "port": 8105,
+        "role": "Local cuisine guide",
+        "motivation": "Help the traveler eat well and taste the local culture",
+        "intent": "Recommend signature local dishes, where to eat, and dining tips",
     },
 ]
 

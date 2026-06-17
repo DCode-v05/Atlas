@@ -30,7 +30,7 @@ from orchestrator.orchestrator import plan_trip
 console = Console()
 
 COLORS = {"destination": "cyan", "itinerary": "yellow", "budget": "red",
-          "weather": "magenta", "host": "gold1"}
+          "weather": "magenta", "cuisine": "green", "host": "gold1"}
 
 
 async def run_turn(request: str, context_id: str) -> None:
@@ -80,6 +80,15 @@ async def run_turn(request: str, context_id: str) -> None:
             console.print(f"   [dim]{ev['agent']} unchanged — reused cached result[/]")
         elif t == "agent_error":
             console.print(f"   [red]{ev['agent']} error: {ev['message']}[/]")
+        elif t == "negotiate_start":
+            console.print(Rule("Round-Table Negotiation", style="grey30"))
+            console.print(f"[gold1]host[/] the specialists talk it over: "
+                          f"{', '.join(p['name'] for p in ev['participants'])}")
+        elif t == "negotiate_said":
+            c = COLORS.get(ev["speaker"], "white")
+            console.print(f"   [{c}]{ev['speakerName']}[/] [dim]({ev['performative']})[/]: {ev['text']}")
+        elif t == "negotiate_end":
+            console.print(Rule(style="grey30"))
         elif t == "synthesis_start":
             console.print(Rule(style="grey30"))
             console.print("[gold1]host[/] synthesizing final plan...")
