@@ -21,6 +21,7 @@ from org.envelope import Performative, read
 from org.onboarding import offer_message
 from org.topology import coordinate
 from protocol.client import A2AClient
+from protocol.models import dump
 
 
 def should_manage(identity) -> bool:
@@ -85,6 +86,11 @@ async def _hire_and_onboard(employee, reporter, spec, *, run_id, context_id, chi
                            intent=f"onboard as {title}", depth=child_depth,
                            context_id=context_id, text=text)
     await client.send_text(text, context_id=context_id, metadata=md)
+    try:                                  # A2A discovery: fetch the now role-aware Agent Card
+        await reporter.emit("card", agentId=worker["agentId"], role=title,
+                            card=dump(await client.get_card()))
+    except Exception:
+        pass
     await reporter.ledger(progressStep={"agentId": worker["agentId"], "role": title,
                                         "task": spec.get("task", ""), "status": "assigned"})
     return (spec, worker)

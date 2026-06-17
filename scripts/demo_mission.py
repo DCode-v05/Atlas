@@ -121,6 +121,9 @@ async def main():
     check(perf.get("cfp", 0) > 0, "hiring auction ran (cfp -> propose -> accept/refuse)")
     check(perf.get("request", 0) and perf.get("inform", 0), "delegation: request -> inform")
     check(len(meet_ctxs) >= 1, "group: turns shared a dedicated meeting contextId")
+    check(perf.get("query-ref", 0) > 0, "agents talked to EACH OTHER (peer query-ref consults)")
+    card_events = [e for e in events if e.get("type") == "card"]
+    check(len(card_events) >= 2, f"Agent Cards discovered over A2A ({len(card_events)} cards)")
     check(m.get("headcount", 0) >= 2, "a team was hired")
     check(m.get("headcount", 0) <= config.MAX_HEADCOUNT and m.get("maxDepth", 0) <= config.MAX_DELEGATION_DEPTH,
           "caps respected (headcount + depth)")

@@ -40,17 +40,29 @@ class Employee:
         self.identity = Identity(agent_id=self.agent_id)
 
     def card(self) -> AgentCard:
+        """The agent's PUBLIC Agent Card — built from its current identity, so once
+        onboarded it advertises the conferred role (this is what discovery returns)."""
+        i = self.identity
+        url = f"http://{config.HOST}:{self.port}/"
+        caps = AgentCapabilities(streaming=True, extensions=[config.ORG_EXT_URI])
+        if i.onboarded:
+            return AgentCard(
+                name=i.role, description=(i.goal or f"{i.role} in the organisation."),
+                url=url, version="1.0.0", capabilities=caps,
+                skills=[AgentSkill(id="role", name=i.role,
+                                   description=i.goal or i.role,
+                                   tags=["onboarded", f"depth-{i.depth}"] + (["manager"] if i.manage else []))])
         return AgentCard(
             name=f"{self.agent_id} · Generalist",
             description="A general-knowledge employee, awaiting a role assignment.",
-            url=f"http://{config.HOST}:{self.port}/",
-            capabilities=AgentCapabilities(streaming=True, extensions=[config.ORG_EXT_URI]),
+            url=url, capabilities=caps,
             skills=[AgentSkill(id="general", name="General Work",
                                description="Can be onboarded into any role, then do the work or manage a team.",
                                tags=["general", "onboardable"])])
 
     def build_app(self):
-        return build_agent_app(self.card(), self.logic, working_note="Considering the request…")
+        # pass the bound method so the served card reflects the LIVE identity
+        return build_agent_app(self.card, self.logic, working_note="Considering the request…")
 
     async def logic(self, user_text: str, ctx) -> str:
         env = read(ctx.metadata) or {}
@@ -104,9 +116,14 @@ class Employee:
             result = await run_as_manager(self, ctx, user_text, reporter,
                                           run_id=run_id, context_id=context_id, mission=mission)
         else:
-            # mesh: consult one peer directly (peer-to-peer, bypassing the manager)
+            # talk to a peer DIRECTLY before contributing (agent-to-agent, not via
+            # the manager): in a group meeting each speaker engages the next peer;
+            # in mesh, the first peer. This is the team conversing with itself.
+            target = env.get("consultTarget")
             peers = env.get("peers") or []
-            if env.get("topology") == "mesh" and peers:
+            if target:
+                await self._consult_peer(target, reporter, run_id, context_id, mission)
+            elif env.get("topology") == "mesh" and peers:
                 await self._consult_peer(peers[0], reporter, run_id, context_id, mission)
             text, tokens = await do_work(self.identity, user_text, mission)
             await reporter.llm(tokens, "do_work")

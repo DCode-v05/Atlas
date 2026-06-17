@@ -105,13 +105,17 @@ def _sse(payload):
     return f"data: {json.dumps(payload)}\n\n"
 
 
-def build_agent_app(card: AgentCard, logic: AgentLogic, *,
+def build_agent_app(card, logic: AgentLogic, *,
                     working_note: str = "Working…") -> FastAPI:
-    app = FastAPI(title=card.name)
+    # `card` is an AgentCard OR a zero-arg callable returning the CURRENT card, so
+    # an agent's advertised card can change the moment it is onboarded into a role
+    # (real A2A discovery then reflects the assigned role).
+    card_provider = card if callable(card) else (lambda: card)
+    app = FastAPI(title=card_provider().name)
 
     @app.get(AGENT_CARD_PATH)
     async def get_agent_card():
-        return JSONResponse(dump(card))
+        return JSONResponse(dump(card_provider()))
 
     @app.post("/")
     async def jsonrpc_endpoint(request: Request):

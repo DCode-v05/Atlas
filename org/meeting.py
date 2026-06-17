@@ -27,13 +27,18 @@ async def run_meeting(employee, reporter, hired, *, run_id: str, mission: str,
                         topic=mission)
 
     transcript: list[tuple[str, str]] = []
-    for p in parts:                       # speaker selection: simple round-robin
+    n = len(parts)
+    for i, p in enumerate(parts):         # round-robin floor; each speaker consults a peer
+        target = parts[(i + 1) % n] if n > 1 else None
         prior = "\n".join(f"- {r}: {t[:80]}" for r, t in transcript) or "(you have the floor first)"
-        prompt = f"Meeting about '{mission}'. So far:\n{prior}\n\nAs {p['role']}, add your view."
+        peer_note = f" After hearing from the {target['role']}," if target else ""
+        prompt = (f"Meeting about '{mission}'. So far:\n{prior}\n\n"
+                  f"As {p['role']},{peer_note} add your view.")
         md = meta(Performative.request, role=employee.identity.role, intent="share in meeting",
                   delegation_depth=child_depth,
                   extra={"runId": run_id, "contextId": meet_ctx, "senderId": employee.agent_id,
-                         "mission": mission, "meeting": True, "topology": "group"})
+                         "mission": mission, "meeting": True, "topology": "group",
+                         "consultTarget": target, "roster": [pp["role"] for pp in parts]})
         await reporter.message(to=p["agentId"], to_role=p["role"],
                                performative=Performative.request, intent=f"floor to {p['role']}",
                                depth=child_depth, context_id=meet_ctx,

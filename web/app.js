@@ -21,6 +21,7 @@ const EXAMPLES = [
 const members = {};          // id -> {role, parentId, depth, status, x, y}
 const nodeEls = {};          // id -> div
 const edgeEls = {};          // childId -> {g, base, flow, packet}
+const cards = {};            // agentId -> acard div
 let RUN = null, running = false;
 const tally = { messages: 0, headcount: 0, depth: 0, tokens: 0 };
 
@@ -140,6 +141,19 @@ function pulse(id) { const n = nodeEls[id]; if (!n) return; n.classList.remove("
 
 const EDGE_COLOR = { propose: "ember", "accept-proposal": "mint", inform: "mint", cfp: "violet", refuse: "rose" };
 const PKT_COLOR = EDGE_COLOR;
+function peerFlow(fromId, toId, perf) {        // transient sibling edge — agents talking to each other
+  const svg = $("#edges"), canvas = $("#canvas");
+  const a = center(fromId), b = center(toId);
+  const d = `M ${a.x} ${a.y} Q ${(a.x + b.x) / 2} ${(a.y + b.y) / 2 - 34} ${b.x} ${b.y}`;
+  const g = document.createElementNS(SVGNS, "g");
+  g.setAttribute("class", "edge peer flowing" + (EDGE_COLOR[perf] ? " " + EDGE_COLOR[perf] : ""));
+  const base = document.createElementNS(SVGNS, "path"); base.setAttribute("class", "edge-base"); base.setAttribute("d", d);
+  const flow = document.createElementNS(SVGNS, "path"); flow.setAttribute("class", "edge-flow"); flow.setAttribute("d", d);
+  g.appendChild(base); g.appendChild(flow); svg.appendChild(g);
+  const pkt = el("div", "packet flowing" + (PKT_COLOR[perf] ? " " + PKT_COLOR[perf] : ""));
+  pkt.style.offsetPath = `path('${d}')`; pkt.style.webkitOffsetPath = `path('${d}')`; canvas.appendChild(pkt);
+  setTimeout(() => { g.remove(); pkt.remove(); }, 1300);
+}
 function flowMessage(from, to, perf) {
   let childId = null, reverse = false;
   if (members[to] && members[to].parentId === from) childId = to;
@@ -153,6 +167,8 @@ function flowMessage(from, to, perf) {
     p.style.animationDirection = reverse ? "reverse" : "normal";
     p.classList.add("flowing"); if (pc) p.classList.add(pc);
     setTimeout(() => { e.g.classList.remove("flowing", "ember", "violet", "mint", "rose"); p.classList.remove("flowing", "ember", "violet", "mint", "rose"); }, 1000);
+  } else if (members[from] && members[to] && from !== "Board" && to !== "Board") {
+    peerFlow(from, to, perf);              // agent <-> agent (no tree edge between them)
   }
   pulse(to); if (members[from]) pulse(from);
 }
@@ -206,6 +222,24 @@ function bumpMetrics() {
   $("#m-tokens").textContent = tally.tokens.toLocaleString();
 }
 
+/* ---------- agent cards (A2A discovery) ---------- */
+function renderCard(ev) {
+  $("#cards-panel").hidden = false;
+  const c = ev.card || {}, id = ev.agentId;
+  let card = cards[id];
+  if (!card) { card = el("div", "acard"); $("#agent-cards").appendChild(card); cards[id] = card; }
+  const isLead = members[id] && members[id].parentId === "Board";
+  card.className = "acard" + (isLead ? " lead" : "");
+  const skills = (c.skills || []).map((s) => `<span class="ac-skill">${esc(s.name)}</span>`).join("");
+  card.innerHTML = `<div class="acard-top"><h3>${esc(c.name || id)}</h3><span class="dot" title="online"></span></div>
+    <div class="ac-desc">${esc(c.description || "")}</div>
+    <div class="ac-skills">${skills}</div>
+    <div class="ac-url">${esc(c.url || "")}</div>
+    <button class="ac-json-toggle">▸ agent-card.json</button>
+    <div class="ac-json sig-json">${highlightJson(c)}</div>`;
+  card.querySelector(".ac-json-toggle").addEventListener("click", () => card.classList.toggle("open"));
+}
+
 /* ---------- event handling ---------- */
 function handle(ev) {
   switch (ev.type) {
@@ -232,6 +266,7 @@ function handle(ev) {
       tally.messages++; tally.depth = Math.max(tally.depth, ev.depth || 0);
       logMessage(ev); flowMessage(ev.from, ev.to, ev.performative); bumpMetrics(); break;
     case "llm": tally.tokens += ev.tokens || 0; bumpMetrics(); break;
+    case "card": renderCard(ev); break;
     case "ledger": fetchLedgers(); break;
     case "meeting":
       if (ev.phase === "open") { if (nodeEls[ev.chair]) nodeEls[ev.chair].classList.add("meet");
@@ -251,6 +286,8 @@ function resetView() {
   tally.messages = tally.headcount = tally.depth = tally.tokens = 0;
   $("#canvas").querySelectorAll(".agent, .packet").forEach((n) => n.remove());
   $("#edges").innerHTML = "";
+  for (const k in cards) delete cards[k];
+  $("#agent-cards").innerHTML = ""; $("#cards-panel").hidden = true;
   $("#feed").innerHTML = ""; $("#final-panel").hidden = true;
   renderGraph(); bumpMetrics();
 }

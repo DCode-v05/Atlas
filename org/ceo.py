@@ -14,7 +14,7 @@ from org.cognition import lead_title
 from org.envelope import Performative, meta
 from org.onboarding import offer_message
 from protocol.client import A2AClient
-from protocol.models import result_text
+from protocol.models import dump, result_text
 
 EmitFn = Callable[[dict], Awaitable[None]]
 AllocateFn = Callable[..., dict | None]
@@ -39,6 +39,10 @@ async def run_mission(allocate: AllocateFn, emit: EmitFn, *, run_id: str,
                 "toRole": title, "performative": Performative.propose,
                 "intent": f"onboard as {title}", "text": text, "depth": 0, "contextId": context_id})
     await client.send_text(text, context_id=context_id, metadata=md)
+    try:                                  # discover the lead's Agent Card (now reflects the role)
+        await emit({"type": "card", "agentId": lid, "role": title, "card": dump(await client.get_card())})
+    except Exception:
+        pass
 
     # hand over the mission (request -> ... -> inform)
     rmd = meta(Performative.request, role="Board", intent="execute the mission",
