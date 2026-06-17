@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ATLAS · A2A Trip Concierge</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+  <div class="aurora" aria-hidden="true"></div>
+
+  <!-- ===================== HEADER ===================== -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="mark">✦</span>
+      <div class="brand-text">
+        <h1>ATLAS</h1>
+        <p>A2A Trip Concierge</p>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span class="proto-tag">A2A · JSON-RPC 0.3.0</span>
+      <span id="mcp-badge" class="llm-badge loading">MCP…</span>
+      <span id="llm-badge" class="llm-badge loading">connecting…</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- ===================== CONSOLE / INPUT ===================== -->
+    <section class="console panel reveal" style="--d:0">
+      <label class="console-label" for="request">Where shall we go?</label>
+      <form id="plan-form" class="console-form">
+        <textarea id="request" rows="2"
+          placeholder="e.g. Plan a 5-day food and temples trip to Kyoto"></textarea>
+        <button id="go" type="submit">
+          <span class="go-label">Plan my trip</span>
+          <span class="go-arrow">➜</span>
+        </button>
+      </form>
+      <div class="chips" id="examples"></div>
+    </section>
+
+    <!-- ===================== STAGE: GRAPH + LOG ===================== -->
+    <section class="stage">
+      <div class="panel graph-panel reveal" style="--d:1">
+        <div class="panel-head">
+          <h2>Agent Network</h2>
+          <span class="hint">live agent-to-agent calls</span>
+        </div>
+        <div class="canvas" id="canvas">
+          <svg id="edges" preserveAspectRatio="none" aria-hidden="true"></svg>
+          <!-- node cards injected by app.js -->
+        </div>
+        <div class="legend">
+          <span><i class="pip idle"></i>idle</span>
+          <span><i class="pip contacted"></i>contacted</span>
+          <span><i class="pip working"></i>working</span>
+          <span><i class="pip done"></i>done</span>
+          <span class="legend-mcp"><i class="mcp-dash"></i>MCP tool call (not A2A)</span>
+        </div>
+      </div>
+
+      <div class="panel log-panel reveal" style="--d:2">
+        <div class="panel-head">
+          <h2>A2A Protocol Log</h2>
+          <span class="hint">real JSON-RPC frames</span>
+        </div>
+        <div class="log" id="log">
+          <div class="log-empty">The wire is quiet. Send a request to watch the
+            agents talk to each other.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== DISCOVERED AGENTS (CARDS) ===================== -->
+    <section class="panel discovery reveal" style="--d:3">
+      <div class="panel-head">
+        <h2>Discovered Agents</h2>
+        <span class="hint">from each agent's <code>/.well-known/agent-card.json</code></span>
+      </div>
+      <div class="agent-cards" id="agent-cards"></div>
+    </section>
+
+    <!-- ===================== AGENT RESPONSES ===================== -->
+    <section class="responses" id="responses" hidden>
+      <div class="panel-head section-head">
+        <h2>Agent Responses</h2>
+        <span class="hint">artifacts returned by each specialist</span>
+      </div>
+      <div class="response-grid" id="response-grid"></div>
+    </section>
+
+    <!-- ===================== FINAL PLAN ===================== -->
+    <section class="final-wrap" id="final" hidden>
+      <div class="boarding-pass">
+        <div class="bp-stub">
+          <span class="bp-label">ATLAS</span>
+          <span class="bp-route" id="bp-route">YOUR TRIP</span>
+          <span class="bp-sub">synthesised by the host agent</span>
+        </div>
+        <div class="bp-body markdown" id="final-body"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>Prototype · A2A protocol implemented from scratch over JSON-RPC + SSE ·
+      powered by Groq</span>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>
