@@ -427,6 +427,15 @@ main {
   width: 18px; height: 0; border-top: 2px dashed var(--violet); display: inline-block;
 }
 
+/* --- mesh edges: agent → agent A2A calls that bypass the host ------------- */
+.edge.mesh-edge .edge-base { stroke-dasharray: 2 6; stroke: rgba(132,210,154,0.35); }
+.edge.mesh-edge .edge-flow { stroke: var(--green); filter: drop-shadow(0 0 6px rgba(132,210,154,0.8)); }
+.packet.mesh { background: var(--green); filter: drop-shadow(0 0 8px rgba(132,210,154,0.95)); }
+.legend-mesh { color: var(--green) !important; }
+.legend-mesh .mesh-dash {
+  width: 18px; height: 0; border-top: 2px dashed var(--green); display: inline-block;
+}
+
 /* --- host (orchestrator) agent card + weather tag ------------------------ */
 .acard.host-card { border-color: rgba(231,177,90,0.45); background: rgba(231,177,90,0.05); }
 .acard-title { display: flex; align-items: center; gap: 8px; }

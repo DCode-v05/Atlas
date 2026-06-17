@@ -32,7 +32,12 @@ const EDGES = [
   { id: "weather",     from: "host",    to: "weather" },
   { id: "cuisine",     from: "host",    to: "cuisine" },
   { id: "mcp",         from: "weather", to: "mcp", kind: "mcp" },   // MCP, not A2A
+  // MESH: agent-to-agent A2A calls that bypass the host (peer consultation).
+  { id: "mesh-iw",     from: "itinerary", to: "weather", kind: "mesh" },
+  { id: "mesh-cb",     from: "cuisine",   to: "budget",  kind: "mesh" },
 ];
+// Which mesh edge lights up when a given agent says it's consulting a peer.
+const MESH_EDGE_FOR = { itinerary: "mesh-iw", cuisine: "mesh-cb" };
 
 const SPECIALIST_KEYS = ["destination", "itinerary", "budget", "weather", "cuisine"];
 // Each specialist's persona accent colour (used for the round-table bubbles).
@@ -123,9 +128,9 @@ function buildGraph() {
   const svg = $("#edges");
 
   EDGES.forEach((e) => {
-    const isMcp = e.kind === "mcp";
+    const kindCls = e.kind === "mcp" ? " mcp-edge" : e.kind === "mesh" ? " mesh-edge" : "";
     const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
-    g.setAttribute("class", "edge" + (isMcp ? " mcp-edge" : ""));
+    g.setAttribute("class", "edge" + kindCls);
     g.id = "edge-" + e.id;
     const base = document.createElementNS("http://www.w3.org/2000/svg", "path");
     base.setAttribute("class", "edge-base");
@@ -133,7 +138,8 @@ function buildGraph() {
     flow.setAttribute("class", "edge-flow");
     g.appendChild(base); g.appendChild(flow); svg.appendChild(g);
 
-    const packet = el("div", "packet" + (isMcp ? " mcp" : ""));  // HTML "data packet" dot
+    const pktCls = e.kind === "mcp" ? " mcp" : e.kind === "mesh" ? " mesh" : "";
+    const packet = el("div", "packet" + pktCls);  // HTML "data packet" dot
     canvas.appendChild(packet);
     edgeEls[e.id] = { g, base, flow, packet };
   });
@@ -169,8 +175,16 @@ function layoutEdges() {
   svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
   EDGES.forEach((e) => {
     const a = center(e.from), b = center(e.to);
-    const dx = (b.x - a.x) * 0.5;
-    const d = `M ${a.x} ${a.y} C ${a.x + dx} ${a.y}, ${b.x - dx} ${b.y}, ${b.x} ${b.y}`;
+    let d;
+    if (e.kind === "mesh") {
+      // Peer nodes share the right-hand column, so bow the link outward to the
+      // right into empty space instead of drawing it straight through the nodes.
+      const bow = Math.max(70, w * 0.14);
+      d = `M ${a.x} ${a.y} C ${a.x + bow} ${a.y}, ${b.x + bow} ${b.y}, ${b.x} ${b.y}`;
+    } else {
+      const dx = (b.x - a.x) * 0.5;
+      d = `M ${a.x} ${a.y} C ${a.x + dx} ${a.y}, ${b.x - dx} ${b.y}, ${b.x} ${b.y}`;
+    }
     edgeEls[e.id].base.setAttribute("d", d);
     edgeEls[e.id].flow.setAttribute("d", d);
     edgeEls[e.id].packet.style.offsetPath = `path('${d}')`;
@@ -520,6 +534,11 @@ function handleEvent(ev) {
               setNode("mcp", "error", "offline");
             }
           }
+          // A specialist narrates a DIRECT peer call — light the mesh link.
+          const meshId = MESH_EDGE_FOR[ev.agent];
+          if (meshId && /consulting/i.test(t) && /mesh/i.test(t)) {
+            setEdge(meshId, true);
+          }
         }
         if (e.status.state === "completed") setNode(ev.agent, "done", "done");
       } else if (kind === "artifact-update") {
@@ -570,11 +589,14 @@ function handleEvent(ev) {
       break;
     }
 
-    case "negotiate_said":
+    case "negotiate_said": {
       setNode(ev.speaker, "done", "spoke");
       setEdge(ev.speaker, false);
+      const meshId = MESH_EDGE_FOR[ev.speaker];
+      if (meshId) setEdge(meshId, false);   // peer call is done
       addNegoBubble(ev);
       break;
+    }
 
     case "negotiate_end":
       negotiating = false;
