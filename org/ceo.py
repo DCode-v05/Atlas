@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Awaitable, Callable
 
+from org.cognition import lead_title
 from org.envelope import Performative, meta
 from org.onboarding import offer_message
 from protocol.client import A2AClient
@@ -22,20 +23,21 @@ AllocateFn = Callable[..., dict | None]
 async def run_mission(allocate: AllocateFn, emit: EmitFn, *, run_id: str,
                       mission: str, context_id: str,
                       topology: str = "hierarchical") -> str:
-    ceo = await allocate(run_id, "CEO", "Board", 0)
-    if not ceo:
-        await emit({"type": "run", "phase": "error", "message": "No capacity to hire a CEO."})
+    title = await lead_title(mission)            # mission-derived, e.g. "Festival Director"
+    lead = await allocate(run_id, title, "Board", 0)
+    if not lead:
+        await emit({"type": "run", "phase": "error", "message": "No capacity to hire a leader."})
         return ""
-    cid, client = ceo["agentId"], A2AClient(ceo["url"])
-    await emit({"type": "hire", "agentId": cid, "role": "CEO", "parentId": "Board", "depth": 0})
+    lid, client = lead["agentId"], A2AClient(lead["url"])
+    await emit({"type": "hire", "agentId": lid, "role": title, "parentId": "Board", "depth": 0})
 
-    # onboard the CEO (propose -> accept)
-    text, md = offer_message(role="CEO", goal=mission, backstory="the founder",
+    # onboard the leader (propose -> accept)
+    text, md = offer_message(role=title, goal=mission, backstory="the accountable leader",
                              scope="the whole mission", depth=0, run_id=run_id,
                              hirer_role="Board", hirer_id="Board", context_id=context_id)
-    await emit({"type": "message", "from": "Board", "fromRole": "Board", "to": cid,
-                "toRole": "CEO", "performative": Performative.propose,
-                "intent": "onboard as CEO", "text": text, "depth": 0, "contextId": context_id})
+    await emit({"type": "message", "from": "Board", "fromRole": "Board", "to": lid,
+                "toRole": title, "performative": Performative.propose,
+                "intent": f"onboard as {title}", "text": text, "depth": 0, "contextId": context_id})
     await client.send_text(text, context_id=context_id, metadata=md)
 
     # hand over the mission (request -> ... -> inform)
@@ -43,8 +45,8 @@ async def run_mission(allocate: AllocateFn, emit: EmitFn, *, run_id: str,
                motivation=mission, delegation_depth=0,
                extra={"runId": run_id, "contextId": context_id, "senderId": "Board",
                       "mission": mission, "topology": topology})
-    await emit({"type": "message", "from": "Board", "fromRole": "Board", "to": cid,
-                "toRole": "CEO", "performative": Performative.request,
+    await emit({"type": "message", "from": "Board", "fromRole": "Board", "to": lid,
+                "toRole": title, "performative": Performative.request,
                 "intent": "execute the mission", "text": mission, "depth": 0,
                 "contextId": context_id})
     task = await client.send_text(mission, context_id=context_id, metadata=rmd)

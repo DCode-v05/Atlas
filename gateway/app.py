@@ -161,31 +161,9 @@ def create_app(runtime) -> FastAPI:
     async def api_run(request: Request):
         body = await request.json()
         mission = (body.get("mission") or body.get("request") or config.DEFAULT_MISSION).strip()
-        rs = _new_run(mission, body.get("topology", "hierarchical"))
+        rs = _new_run(mission, body.get("topology", "group"))
         asyncio.create_task(drive(rs))
         return JSONResponse({"runId": rs.run_id, "contextId": rs.context_id})
-
-    # ---- compare topologies on the SAME mission --------------------------
-    @app.post("/api/compare")
-    async def api_compare(request: Request):
-        body = await request.json()
-        mission = (body.get("mission") or body.get("request") or config.DEFAULT_MISSION).strip()
-        topos = body.get("topologies") or ["hierarchical", "mesh", "group"]
-        created = [_new_run(mission, t) for t in topos]
-
-        async def drive_all():
-            from llm.client import set_force_mock
-            set_force_mock(True)               # deterministic => apples-to-apples
-            try:
-                for rs in created:             # sequential: they share the pool
-                    await drive(rs)
-            finally:
-                set_force_mock(False)
-
-        asyncio.create_task(drive_all())
-        return JSONResponse({"mission": mission,
-                             "runs": [{"topology": rs.topology, "runId": rs.run_id}
-                                      for rs in created]})
 
     # ---- live event stream (SSE) -----------------------------------------
     @app.get("/api/stream")

@@ -157,64 +157,36 @@ Delegation is a clean two-stage routine (`org/delegation.py`): **(1)** decompose
 sub-task — turning an "expert" agent into a sub-manager:
 
 ```
-CEO (depth 0)
- └─ Engineering Lead (depth 1, manage=True)     ← becomes a sub-orchestrator
-     ├─ Engineering Specialist A (depth 2)
-     └─ Engineering Specialist B (depth 2)
+Festival Director (depth 0)              ← the lead, named for the mission
+ └─ Marketing Lead (depth 1, manage=True)     ← becomes a sub-orchestrator
+     ├─ Social Specialist (depth 2)
+     └─ Press Specialist (depth 2)
 ```
 
 Recursion is **depth-capped**: `should_manage` requires `depth <
 MAX_DELEGATION_DEPTH` (default 3), and the `manage` flag is only granted when
-there's room below. In the deterministic offline planner, the Engineering Lead is
-the role that gets a sub-team — so a default run reaches depth 2.
+there's room below. The LLM tends to mark "Lead / Manager / Director" roles as
+managers, so a typical run reaches depth 2-3.
 
 ---
 
-## 6. Comparison mode — and why it forces the mock
+## 6. Topologies — and what this build runs
 
-The comparison mode (`POST /api/compare`, or the "Compare all three" option) runs
-the **same mission** under hierarchical, mesh, and group. To make the metric
-deltas meaningful it **forces the deterministic mock LLM** for the duration:
+The code implements all three coordination patterns (`org/topology.py`,
+`org/meeting.py`), but **the app runs GROUP only** — the topology selector and the
+old side-by-side comparison were removed, and the LLM is now real (so there is no
+longer a deterministic basis for an apples-to-apples comparison).
 
-```python
-# gateway/app.py  → drive_all()
-set_force_mock(True)        # deterministic => apples-to-apples
-try:
-    for rs in created:     # sequential: the three runs share the employee pool
-        await drive(rs)
-finally:
-    set_force_mock(False)
-```
+For the record, the trade-offs the three patterns illustrate:
 
-**Why force the mock?** Because the org's *reasoning* (decompose / do_work /
-synthesize) must be identical run-to-run. If a live LLM invented a different team
-each time, you couldn't tell whether a metric changed because of the *topology*
-or because the agents simply *thought* something different. With the mock, **org
-composition is held constant**, so any delta is attributable to the communication
-pattern alone. The smoke test `scripts/smoke_topologies.py` asserts exactly this:
-identical roles + headcount across topologies, but different message counts and
-performatives.
+- **Hierarchical** — 1:1 delegation, fully parallel. The lean baseline: fewest
+  messages, fastest, no peer chatter.
+- **Mesh** — reports also consult each other directly (`query-ref → inform`), so
+  more messages for the same team — chatter traded for resilience.
+- **Group** (what we run) — the team meets in one shared `contextId`; speakers take
+  turns and each sees what was said before. The most collaborative pattern, and
+  (being sequential) the slowest.
 
-### The measured deltas (an illustration)
-
-On the default doorbell mission with the mock, the three topologies compose the
-same team but talk very differently (approximate figures):
-
-| Topology     | Messages | Signature                                         | Speed         |
-| ------------ | -------- | ------------------------------------------------- | ------------- |
-| Hierarchical | ~54      | No peer consults (`query-ref` count = 0).         | **Fastest**   |
-| Mesh         | ~62      | Extra `query-ref`/`inform` peer consults → more msgs. | Mid           |
-| Group        | ~54      | Same message count, but extra meeting contexts.   | **Slowest** (turns are sequential) |
-
-The takeaways the comparison is designed to teach:
-
-- **Mesh trades chatter for resilience** — more messages (peer consults), same
-  team.
-- **Group costs latency, not messages** — the meeting is sequential (each speaker
-  waits for the prior), so it's the slowest even when the message count matches
-  hierarchical. It also opens extra `contextId`s (the meeting rooms).
-- **Hierarchical is the lean baseline** — fewest interactions, fully parallel.
-
-> These numbers come from the deterministic mock, so they reproduce. Want the
-> exact figures on your machine? Run `python scripts/smoke_topologies.py` — it
-> prints `msgs / head / depth / consults / meetings / contexts` per topology.
+You can still force a single run's pattern by passing `"topology"` to
+`POST /api/run` (`"hierarchical" | "mesh" | "group"`); the UI always sends
+`"group"`.

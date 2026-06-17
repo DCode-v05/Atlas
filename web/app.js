@@ -1,13 +1,13 @@
-/* ATLAS — organisation of agents · front-end.
+/* ATLAS // Signal Deck — front-end.
    A live org-chart graph (grows as agents are hired, with data packets flowing
-   along the edges), a performative-tagged A2A protocol log, shared ledgers,
-   metrics, the final result, and a topology comparison — all driven by the
-   gateway's SSE telemetry. Design language ported from the original ATLAS UI. */
+   along the edges), a performative-tagged A2A signal feed, shared ledgers, live
+   metrics and the final deliverable — all driven by the gateway's SSE telemetry.
+   Topology is always GROUP (meetings). */
 "use strict";
 
 const $ = (s) => document.querySelector(s);
 const el = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h != null) e.innerHTML = h; return e; };
-const escapeHtml = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const SVGNS = "http://www.w3.org/2000/svg";
 const nowt = () => { const d = new Date(); return d.toLocaleTimeString([], { hour12: false }) + "." + String(d.getMilliseconds()).padStart(3, "0"); };
 
@@ -30,7 +30,7 @@ async function loadStatus() {
     const s = await (await fetch("/api/status")).json();
     const b = $("#llm-badge");
     if (s.usingRealLLM) { b.classList.add("live"); b.textContent = "Groq · " + s.model; }
-    else { b.classList.add("mock"); b.textContent = "deterministic mock"; }
+    else { b.classList.add("mock"); b.textContent = "GROQ_API_KEY required"; }
     $("#caps").textContent =
       `caps · headcount ≤ ${s.caps.headcount} · depth ≤ ${s.caps.depth} · budget ${s.caps.tokenBudget.toLocaleString()} tokens · ${s.runtime} runtime`;
   } catch { $("#llm-badge").textContent = "gateway offline"; }
@@ -41,7 +41,7 @@ function mdToHtml(src) {
   const lines = String(src || "").replace(/\r/g, "").split("\n");
   let html = "", list = null;
   const close = () => { if (list) { html += `</${list}>`; list = null; } };
-  const inl = (t) => escapeHtml(t)
+  const inl = (t) => esc(t)
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
@@ -56,7 +56,7 @@ function mdToHtml(src) {
   close(); return html;
 }
 function highlightJson(obj) {
-  const json = escapeHtml(JSON.stringify(obj, null, 2));
+  const json = esc(JSON.stringify(obj, null, 2));
   return json.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(\.\d+)?)/g, (m) => {
     let cls = "jn";
     if (/^"/.test(m)) cls = /:$/.test(m) ? "jk" : "js";
@@ -80,14 +80,14 @@ function relayout() {
   }
 }
 function nodeClass(id) {
-  const m = members[id]; let c = "node";
-  if (id === "Board") c += " you";
-  else if (m.role === "CEO") c += " host";
+  const m = members[id]; let c = "agent";
+  if (id === "Board") c += " client";
+  else if (m.parentId === "Board") c += " lead";
   const st = m.status;
   if (st === "working") c += " is-working";
   else if (st === "done") c += " is-done";
   else if (st === "error") c += " is-error";
-  else if (st === "hired" || st === "onboarded") c += " is-contacted";
+  else if (st === "onboarded") c += " is-onboarded";
   return c;
 }
 function renderGraph() {
@@ -97,23 +97,24 @@ function renderGraph() {
     let node = nodeEls[id];
     if (!node) {
       node = el("div");
-      node.innerHTML = `<div class="node-role"></div><div class="node-name"></div>
-        <div class="node-foot"><span class="pip"></span><span class="foot-txt"></span></div>`;
+      node.innerHTML = `<div class="agent-top"><span class="agent-id"></span><span class="agent-tag"></span></div>
+        <div class="agent-role"></div>
+        <div class="agent-foot"><span class="pip"></span><span class="foot-txt"></span></div>`;
       canvas.appendChild(node); nodeEls[id] = node;
     }
     node.className = nodeClass(id);
     node.style.left = members[id].x + "%";
     node.style.top = members[id].y + "%";
-    node.querySelector(".node-role").textContent = id === "Board" ? "client" : "agent · " + id;
-    node.querySelector(".node-name").textContent = members[id].role || id;
+    const tag = id === "Board" ? "YOU" : (members[id].parentId === "Board" ? "LEAD" : "");
+    node.querySelector(".agent-id").textContent = id === "Board" ? "client" : id;
+    node.querySelector(".agent-tag").textContent = tag;
+    node.querySelector(".agent-tag").style.display = tag ? "" : "none";
+    node.querySelector(".agent-role").textContent = members[id].role || id;
     node.querySelector(".foot-txt").textContent = members[id].status || "";
   }
   layoutEdges();
 }
-function center(id) {
-  const c = $("#canvas");
-  return { x: (members[id].x / 100) * c.clientWidth, y: (members[id].y / 100) * c.clientHeight };
-}
+function center(id) { const c = $("#canvas"); return { x: (members[id].x / 100) * c.clientWidth, y: (members[id].y / 100) * c.clientHeight }; }
 function layoutEdges() {
   const svg = $("#edges"), canvas = $("#canvas"), w = canvas.clientWidth, h = canvas.clientHeight;
   svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
@@ -132,57 +133,56 @@ function layoutEdges() {
     const a = center(p), b = center(id), dx = (b.x - a.x) * 0.5;
     const d = `M ${a.x} ${a.y} C ${a.x + dx} ${a.y}, ${b.x - dx} ${b.y}, ${b.x} ${b.y}`;
     e.base.setAttribute("d", d); e.flow.setAttribute("d", d);
-    e.packet.style.offsetPath = `path('${d}')`;
-    e.packet.style.webkitOffsetPath = `path('${d}')`;
+    e.packet.style.offsetPath = `path('${d}')`; e.packet.style.webkitOffsetPath = `path('${d}')`;
   }
 }
 function pulse(id) { const n = nodeEls[id]; if (!n) return; n.classList.remove("ping"); void n.offsetWidth; n.classList.add("ping"); setTimeout(() => n.classList.remove("ping"), 600); }
 
-const EDGE_COLOR = { propose: "amber", "accept-proposal": "amber", cfp: "violet", "query-ref": "violet", refuse: "coral" };
-const PKT_COLOR = { propose: "amber", "accept-proposal": "green", cfp: "violet", "query-ref": "violet", refuse: "coral", inform: "green" };
+const EDGE_COLOR = { propose: "ember", "accept-proposal": "mint", inform: "mint", cfp: "violet", refuse: "rose" };
+const PKT_COLOR = EDGE_COLOR;
 function flowMessage(from, to, perf) {
   let childId = null, reverse = false;
   if (members[to] && members[to].parentId === from) childId = to;
   else if (members[from] && members[from].parentId === to) { childId = from; reverse = true; }
   if (childId && edgeEls[childId]) {
     const e = edgeEls[childId], ec = EDGE_COLOR[perf], pc = PKT_COLOR[perf];
-    e.g.classList.remove("flowing", "amber", "violet", "coral"); void e.g.offsetWidth;
+    e.g.classList.remove("flowing", "ember", "violet", "mint", "rose"); void e.g.offsetWidth;
     e.g.classList.add("flowing"); if (ec) e.g.classList.add(ec);
     const p = e.packet;
-    p.classList.remove("flowing", "amber", "violet", "coral", "green"); void p.offsetWidth;
+    p.classList.remove("flowing", "ember", "violet", "mint", "rose"); void p.offsetWidth;
     p.style.animationDirection = reverse ? "reverse" : "normal";
     p.classList.add("flowing"); if (pc) p.classList.add(pc);
-    setTimeout(() => { e.g.classList.remove("flowing", "amber", "violet", "coral"); p.classList.remove("flowing", "amber", "violet", "coral", "green"); }, 1000);
+    setTimeout(() => { e.g.classList.remove("flowing", "ember", "violet", "mint", "rose"); p.classList.remove("flowing", "ember", "violet", "mint", "rose"); }, 1000);
   }
   pulse(to); if (members[from]) pulse(from);
 }
 
-/* ---------- protocol log ---------- */
-function logRow(inner, cls, ev) {
-  const log = $("#log"); const e0 = log.querySelector(".log-empty"); if (e0) e0.remove();
-  const row = el("div", "log-row" + (cls ? " " + cls : ""));
+/* ---------- signal feed ---------- */
+function sigRow(inner, cls, ev) {
+  const feed = $("#feed"); const e0 = feed.querySelector(".feed-empty"); if (e0) e0.remove();
+  const row = el("div", "sig" + (cls ? " " + cls : ""));
   row.innerHTML = inner;
   if (ev) {
     row.style.cursor = "pointer";
-    const jd = el("div", "log-json"); jd.style.display = "none"; jd.innerHTML = highlightJson(ev);
+    const jd = el("div", "sig-json"); jd.style.display = "none"; jd.innerHTML = highlightJson(ev);
     row.appendChild(jd);
     row.addEventListener("click", () => { jd.style.display = jd.style.display === "none" ? "block" : "none"; });
   }
-  log.appendChild(row); log.scrollTop = log.scrollHeight;
+  feed.appendChild(row); feed.scrollTop = feed.scrollHeight;
 }
 function logMessage(ev) {
   const perf = ev.performative || "sys";
-  logRow(`<div class="log-head">
-      <span class="log-time">${nowt()}</span>
-      <span class="who">${escapeHtml(ev.fromRole || ev.from)}</span><span class="arrow">→</span>
-      <span class="who">${escapeHtml(ev.toRole || ev.to)}</span>
-      <span class="tag ${escapeHtml(perf)}">${escapeHtml(perf)}</span>
-    </div>${ev.intent ? `<div class="log-intent">${escapeHtml(ev.intent)}</div>` : ""}`, null, ev);
+  sigRow(`<div class="sig-head">
+      <span class="sig-t">${nowt()}</span>
+      <span class="sig-who">${esc(ev.fromRole || ev.from)}</span><span class="sig-arrow">→</span>
+      <span class="sig-who">${esc(ev.toRole || ev.to)}</span>
+      <span class="tag ${esc(perf)}">${esc(perf)}</span>
+    </div>${ev.intent ? `<div class="sig-intent">${esc(ev.intent)}</div>` : ""}`, null, ev);
 }
 function logSys(text, cls) {
-  logRow(`<div class="log-head"><span class="log-time">${nowt()}</span>
+  sigRow(`<div class="sig-head"><span class="sig-t">${nowt()}</span>
     <span class="tag ${cls || "sys"}">${cls === "cap" ? "cap" : cls === "meet" ? "meeting" : "system"}</span>
-    <span class="log-msg">${text}</span></div>`, (cls || "sys"));
+    <span class="sig-msg">${text}</span></div>`, (cls || "sys"));
 }
 
 /* ---------- ledgers / metrics ---------- */
@@ -191,11 +191,11 @@ function renderLedgers(L) {
   $("#ledger-panel").hidden = false;
   if (L.task) {
     $("#l-plan").textContent = L.task.plan || "—";
-    $("#l-facts").innerHTML = (L.task.facts || []).map((f) => `<li>› ${escapeHtml(f)}</li>`).join("");
+    $("#l-facts").innerHTML = (L.task.facts || []).map((f) => `<li>› ${esc(f)}</li>`).join("");
   }
   if (L.progress) {
     $("#l-steps").innerHTML = (L.progress.steps || []).map((s) =>
-      `<li><span class="${s.status === "done" ? "ok" : "pend"}">${s.status === "done" ? "✓" : "…"}</span> ${escapeHtml(s.role)} — ${escapeHtml((s.task || "").slice(0, 44))}</li>`).join("");
+      `<li><span class="${s.status === "done" ? "ok" : "pend"}">${s.status === "done" ? "✓" : "…"}</span> ${esc(s.role)} — ${esc((s.task || "").slice(0, 44))}</li>`).join("");
   }
 }
 function bumpMetrics() {
@@ -210,17 +210,17 @@ function bumpMetrics() {
 function handle(ev) {
   switch (ev.type) {
     case "run":
-      if (ev.phase === "started") logSys(`Mission started — <span class="k">${escapeHtml(ev.mission)}</span>`);
+      if (ev.phase === "started") logSys(`Mission deployed — <span class="k">${esc(ev.mission)}</span>`);
       else if (ev.phase === "done") {
         $("#final-panel").hidden = false; $("#final").innerHTML = mdToHtml(ev.final);
         if (ev.metrics) $("#m-elapsed").textContent = (ev.metrics.elapsedMs / 1000).toFixed(1) + "s";
         logSys("Mission complete ✓"); finish();
-      } else if (ev.phase === "error") { logSys(escapeHtml(ev.message), "cap"); finish(); }
+      } else if (ev.phase === "error") { logSys(esc(ev.message), "cap"); finish(); }
       break;
     case "hire":
       members[ev.agentId] = { role: ev.role, parentId: ev.parentId, depth: ev.depth, status: "hired" };
       tally.headcount++; renderGraph(); bumpMetrics();
-      logSys(`hired <span class="k">${escapeHtml(ev.agentId)}</span> as ${escapeHtml(ev.role)} · depth ${ev.depth}`);
+      logSys(`hired <span class="k">${esc(ev.agentId)}</span> as ${esc(ev.role)} · depth ${ev.depth}`);
       break;
     case "onboard": {
       const m = members[ev.agentId] || (members[ev.agentId] = {});
@@ -235,92 +235,47 @@ function handle(ev) {
     case "ledger": fetchLedgers(); break;
     case "meeting":
       if (ev.phase === "open") { if (nodeEls[ev.chair]) nodeEls[ev.chair].classList.add("meet");
-        logSys(`meeting opened by <span class="k">${escapeHtml(ev.chair)}</span> · ${escapeHtml((ev.participants || []).join(", "))}`, "meet"); }
+        logSys(`meeting opened by <span class="k">${esc(ev.chair)}</span> · ${esc((ev.participants || []).join(", "))}`, "meet"); }
       else { if (nodeEls[ev.chair]) nodeEls[ev.chair].classList.remove("meet"); logSys("meeting closed", "meet"); }
       break;
-    case "cap": logSys(`cap hit (${escapeHtml(ev.kind)}): ${escapeHtml(ev.message)}`, "cap"); break;
+    case "cap": logSys(`cap hit (${esc(ev.kind)}): ${esc(ev.message)}`, "cap"); break;
   }
 }
 async function fetchLedgers() { if (!RUN) return; try { const s = await (await fetch(`/api/run-state?run=${RUN}`)).json(); renderLedgers(s.ledgers); } catch {} }
 
-/* ---------- run ---------- */
+/* ---------- run (always group) ---------- */
 function resetView() {
   for (const k in members) delete members[k];
   for (const k in nodeEls) delete nodeEls[k];
   for (const k in edgeEls) delete edgeEls[k];
   tally.messages = tally.headcount = tally.depth = tally.tokens = 0;
-  $("#canvas").querySelectorAll(".node, .packet").forEach((n) => n.remove());
+  $("#canvas").querySelectorAll(".agent, .packet").forEach((n) => n.remove());
   $("#edges").innerHTML = "";
-  $("#log").innerHTML = ""; $("#final-panel").hidden = true; $("#compare-panel").hidden = true;
+  $("#feed").innerHTML = ""; $("#final-panel").hidden = true;
   renderGraph(); bumpMetrics();
 }
-function finish() { running = false; const g = $("#go"); g.disabled = false; g.classList.remove("running"); g.querySelector(".go-label").textContent = "Start mission"; }
+function finish() { running = false; const g = $("#go"); g.disabled = false; g.classList.remove("running"); g.querySelector(".go-label").textContent = "Deploy"; }
 
-async function run(mission, topology) {
+async function run(mission) {
   if (running) return; running = true; resetView();
-  const g = $("#go"); g.disabled = true; g.classList.add("running"); g.querySelector(".go-label").textContent = "Running…";
-  const r = await (await fetch("/api/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mission, topology }) })).json();
+  const g = $("#go"); g.disabled = true; g.classList.add("running"); g.querySelector(".go-label").textContent = "Running";
+  const r = await (await fetch("/api/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mission, topology: "group" }) })).json();
   RUN = r.runId;
   const es = new EventSource(`/api/stream?run=${RUN}`);
   es.onmessage = (m) => { try { handle(JSON.parse(m.data)); } catch {} };
   const t = setInterval(() => { if (!running) { es.close(); clearInterval(t); } }, 500);
 }
 
-/* ---------- compare ---------- */
-async function runCompare(mission) {
-  if (running) return; running = true; resetView();
-  $("#compare-panel").hidden = false;
-  $("#compare-grid").innerHTML = '<p class="hint">Running the same mission under each topology…</p>';
-  const g = $("#go"); g.disabled = true; g.classList.add("running"); g.querySelector(".go-label").textContent = "Comparing…";
-  const cols = {};
-  try {
-    const r = await (await fetch("/api/compare", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mission }) })).json();
-    r.runs.forEach((x) => { cols[x.topology] = { runId: x.runId, metrics: null, status: "queued" }; });
-    renderCompare(cols);
-    let done = false;
-    while (!done) {
-      done = true;
-      for (const topo in cols) {
-        if (cols[topo].status === "done") continue;
-        const s = await (await fetch(`/api/run-state?run=${cols[topo].runId}`)).json();
-        cols[topo].status = s.status || "running"; cols[topo].metrics = s.metrics;
-        if (s.status !== "done") done = false;
-      }
-      renderCompare(cols);
-      if (!done) await new Promise((z) => setTimeout(z, 700));
-    }
-  } catch (e) { $("#compare-grid").innerHTML = `<p class="hint">compare failed: ${escapeHtml(e.message)}</p>`; }
-  finish();
-}
-function renderCompare(cols) {
-  const order = ["hierarchical", "mesh", "group"].filter((t) => cols[t]);
-  const labels = { hierarchical: "Hierarchical", mesh: "Mesh", group: "Group" };
-  const rows = [["messages", "Messages"], ["tokens", "Tokens"], ["headcount", "Headcount"], ["maxDepth", "Max depth"], ["elapsedMs", "Elapsed"]];
-  const best = {};
-  ["messages", "elapsedMs"].forEach((k) => { let bt = null, bv = Infinity; order.forEach((t) => { const m = cols[t].metrics; if (m && m[k] < bv) { bv = m[k]; bt = t; } }); best[k] = bt; });
-  let html = `<table class="ctable"><thead><tr><th></th>` +
-    order.map((t) => `<th>${labels[t]} <span class="cst ${cols[t].status}">${cols[t].status}</span></th>`).join("") + `</tr></thead><tbody>`;
-  for (const [k, lab] of rows) {
-    html += `<tr><td class="ck">${lab}</td>` + order.map((t) => {
-      const m = cols[t].metrics; if (!m) return "<td>–</td>";
-      const v = (k === "elapsedMs") ? (m.elapsedMs / 1000).toFixed(1) + "s" : (typeof m[k] === "number" ? m[k].toLocaleString() : m[k]);
-      return `<td class="${best[k] === t ? "win" : ""}">${v}</td>`;
-    }).join("") + "</tr>";
-  }
-  html += `</tbody></table><p class="chint">Fewest <strong>messages</strong> = least coordination overhead; lowest <strong>elapsed</strong> = fastest. Same team throughout — only the wiring changed.</p>`;
-  $("#compare-grid").innerHTML = html;
-}
-
 /* ---------- init ---------- */
 function init() {
   loadStatus();
   $("#legend").innerHTML = [
-    ["var(--teal)", "request"], ["var(--green)", "inform / accept"], ["var(--amber)", "propose"],
-    ["var(--violet)", "cfp / query-ref"], ["var(--coral)", "refuse"]
+    ["var(--ice)", "request"], ["var(--mint)", "inform / accept"], ["var(--ember)", "propose"],
+    ["var(--violet)", "cfp"], ["var(--rose)", "refuse"]
   ].map(([c, l]) => `<span><i style="background:${c}"></i>${l}</span>`).join("");
   const chips = $("#examples");
   EXAMPLES.forEach((ex) => {
-    const c = el("button", "chip", escapeHtml(ex)); c.type = "button";
+    const c = el("button", "chip", esc(ex)); c.type = "button";
     c.addEventListener("click", () => { $("#mission").value = ex; $("#mission").focus(); });
     chips.appendChild(c);
   });
@@ -329,9 +284,8 @@ function init() {
   setTimeout(layoutEdges, 120);
   $("#run-form").addEventListener("submit", (e) => {
     e.preventDefault();
-    const mission = $("#mission").value.trim() || $("#mission").placeholder.replace(/^e\.g\.\s*/, "");
-    const topo = $("#topology").value;
-    if (topo === "compare") runCompare(mission); else run(mission, topo);
+    const mission = $("#mission").value.trim() || $("#mission").placeholder.replace(/^.*?—\s*e\.g\.\s*/, "");
+    run(mission);
   });
 }
 document.addEventListener("DOMContentLoaded", init);

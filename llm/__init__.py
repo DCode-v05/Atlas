@@ -1,1 +1,1 @@
-"""llm — the language-model layer (Groq) with a deterministic offline mock."""
+"""llm — the language-model layer (Groq). Real LLM only; no offline mock."""

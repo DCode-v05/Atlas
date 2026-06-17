@@ -1,36 +1,36 @@
 ATLAS — 10 mission prompts to try
 ==================================================================
 Paste any of these into the mission box at http://127.0.0.1:8000
-(start it with `python launch.py`), or use them with the API/scripts.
+(start it with `python launch.py`), or send them to POST /api/run.
 
-Each mission makes the CEO hire a DIFFERENT, mission-appropriate team — that
-is the whole point: general-knowledge agents that self-organise into whatever
-the mission needs. The [mode] hint suggests a communication topology so the
-set as a whole exercises every pattern; you can run any mission under any mode,
-or pick "Compare all three" to watch the coordination differ side by side.
+Each mission makes the organisation hire a DIFFERENT, mission-appropriate team
+— that is the whole point: general-knowledge agents that self-organise into
+whatever the mission needs, led by an agent NAMED for the mission (e.g. a coffee
+festival is run by a "Festival Director"). The team then collaborates in group
+meetings to produce the result.
 
 ------------------------------------------------------------------
- 1. Design and spec a privacy-first smart doorbell.                 [hierarchical]
- 2. Plan a weekend coffee festival for 5,000 attendees.             [compare all three]
- 3. Build a minimal habit-tracking mobile app.                      [mesh]
- 4. Write a go-to-market plan for an AI note-taking app.            [hierarchical]
- 5. Produce a research brief on the state of solid-state batteries. [group]
- 6. Plan and outline a six-episode podcast series on space.         [group]
- 7. Plan the opening of a specialty coffee shop in a college town.  [compare all three]
- 8. Design a 30-day social campaign for a sustainable sneaker brand.[mesh]
- 9. Design a four-week beginner curriculum for learning Python.     [group]
-10. Design the core gameplay loop and economy for a puzzle game.    [mesh]
+ 1. Design and spec a privacy-first smart doorbell.
+ 2. Plan a weekend coffee festival for 5,000 attendees.
+ 3. Build a minimal habit-tracking mobile app.
+ 4. Write a go-to-market plan for an AI note-taking app.
+ 5. Produce a research brief on the state of solid-state batteries.
+ 6. Plan and outline a six-episode podcast series on space.
+ 7. Plan the opening of a specialty coffee shop in a college town.
+ 8. Design a 30-day social campaign for a sustainable sneaker brand.
+ 9. Design a four-week beginner curriculum for learning Python.
+10. Design the core gameplay loop and economy for a puzzle game.
 ------------------------------------------------------------------
 
 Why these:
 - Missions with clear sub-domains (engineering / design / marketing / ops /
   legal ...) produce the richest org charts and the deepest recursion.
-- [mesh]  suits work where disciplines must cross-talk (eng <-> design).
-- [group] suits brainstorm / consensus work (a writers' room, a syllabus).
-- [compare all three] runs the same mission three ways and shows the metric
-  deltas — fewest messages = least coordination overhead, lowest elapsed = fastest.
+- Broad, open-ended briefs let the lead agent decide the team shape, so you see
+  genuinely emergent roles rather than a fixed template.
 
 Notes:
-- No GROQ_API_KEY -> deterministic offline mock (reproducible; same team every run).
-- With a Groq key -> roles are emergent and tailored to each mission.
+- Requires a GROQ_API_KEY (real LLM only — there is no offline mock).
+- Roles are emergent and tailored to each mission; the top agent's title is
+  derived from your prompt (e.g. "Book Fair Manager", "Festival Director").
+- Communication topology is GROUP — the team collaborates in shared meeting threads.
 - Caps: headcount <= 12, depth <= 3 (hard); token budget is metered + shown.

@@ -3,113 +3,100 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ATLAS · Organisation of Agents</title>
+  <title>ATLAS · Signal Deck</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <div class="grain" aria-hidden="true"></div>
-  <div class="aurora" aria-hidden="true"></div>
 
-  <header class="topbar">
-    <div class="brand">
-      <span class="mark">✦</span>
-      <div class="brand-text">
+  <header class="deck-top">
+    <div class="wordmark">
+      <span class="mark">A</span>
+      <div>
         <h1>ATLAS</h1>
-        <p>Organisation of Agents</p>
+        <p>Signal Deck · Organisation of Agents</p>
       </div>
     </div>
-    <div class="topbar-right">
-      <span class="proto-tag">A2A · JSON-RPC 0.3.0</span>
-      <span id="llm-badge" class="llm-badge">connecting…</span>
+    <div class="sysline">
+      <span class="chip-tag">A2A · JSON-RPC 0.3.0</span>
+      <span class="chip-tag">GROUP TOPOLOGY</span>
+      <span id="llm-badge" class="badge">connecting…</span>
     </div>
   </header>
 
   <main>
-    <!-- console -->
+    <!-- mission console -->
     <section class="panel console reveal" style="--d:0">
-      <label class="console-label" for="mission">Give the organisation a mission</label>
+      <label class="console-label" for="mission">Mission directive</label>
       <form id="run-form" class="console-form">
         <textarea id="mission" rows="2"
-          placeholder="e.g. Design and spec a privacy-first smart doorbell"></textarea>
-        <select id="topology" title="communication topology">
-          <option value="hierarchical">Hierarchical</option>
-          <option value="mesh">Mesh · peer-to-peer</option>
-          <option value="group">Group · meetings</option>
-          <option value="compare">Compare all three</option>
-        </select>
-        <button id="go" type="submit"><span class="go-label">Start mission</span><span class="go-arrow">➜</span></button>
+          placeholder="Give the organisation a mission — e.g. Design and spec a privacy-first smart doorbell"></textarea>
+        <button id="go" type="submit"><span class="go-label">Deploy</span><span class="go-arrow">▸</span></button>
       </form>
       <div class="chips" id="examples"></div>
       <div class="caps" id="caps"></div>
     </section>
 
-    <!-- live metrics -->
-    <section class="metrics reveal" id="metrics" style="--d:1" hidden>
-      <div class="metric"><span class="m-val" id="m-messages">0</span><span class="m-key">messages</span></div>
-      <div class="metric"><span class="m-val" id="m-headcount">0</span><span class="m-key">headcount</span></div>
-      <div class="metric"><span class="m-val" id="m-depth">0</span><span class="m-key">max depth</span></div>
-      <div class="metric"><span class="m-val" id="m-tokens">0</span><span class="m-key">tokens</span></div>
-      <div class="metric"><span class="m-val" id="m-elapsed">0.0s</span><span class="m-key">elapsed</span></div>
+    <!-- HUD metrics -->
+    <section class="hud reveal" id="metrics" style="--d:1" hidden>
+      <div class="stat"><span class="sv" id="m-messages">0</span><span class="sk">messages</span></div>
+      <div class="stat"><span class="sv" id="m-headcount">0</span><span class="sk">headcount</span></div>
+      <div class="stat"><span class="sv" id="m-depth">0</span><span class="sk">max depth</span></div>
+      <div class="stat"><span class="sv" id="m-tokens">0</span><span class="sk">tokens</span></div>
+      <div class="stat"><span class="sv" id="m-elapsed">0.0s</span><span class="sk">elapsed</span></div>
     </section>
 
-    <!-- topology comparison -->
-    <section class="panel compare-panel reveal" id="compare-panel" style="--d:1" hidden>
-      <div class="panel-head">
-        <h2>Topology comparison</h2>
-        <span class="hint">same mission &amp; same hired team — only the communication pattern differs</span>
-      </div>
-      <div id="compare-grid"></div>
-    </section>
-
-    <!-- stage: org graph + protocol log -->
-    <section class="stage">
-      <div class="panel graph-panel reveal" style="--d:2">
-        <div class="panel-head">
-          <h2>Org chart</h2>
-          <span class="hint">the company grows as agents are hired &amp; onboarded</span>
+    <!-- org graph + signal feed -->
+    <section class="deck">
+      <div class="panel reveal" style="--d:2">
+        <div class="phead">
+          <span class="pdx">02</span><h2 class="ptitle">Org graph</h2>
+          <span class="prule"></span><span class="phint">grows as agents are hired</span>
         </div>
         <div class="canvas" id="canvas">
           <svg id="edges" preserveAspectRatio="none" aria-hidden="true"></svg>
-          <!-- nodes + packets injected by app.js -->
         </div>
         <div class="legend" id="legend"></div>
       </div>
 
-      <div class="panel log-panel reveal" style="--d:3">
-        <div class="panel-head">
-          <h2>A2A protocol log</h2>
-          <span class="hint">every message, tagged with its performative</span>
+      <div class="panel feed-panel reveal" style="--d:3">
+        <div class="phead">
+          <span class="pdx">03</span><h2 class="ptitle">Signal feed</h2>
+          <span class="prule"></span><span class="phint">A2A · performatives</span>
         </div>
-        <div class="log" id="log"><div class="log-empty">The wire is quiet. Start a mission.</div></div>
+        <div class="feed" id="feed"><div class="feed-empty">The wire is quiet. Deploy a mission.</div></div>
       </div>
     </section>
 
     <!-- shared ledgers -->
-    <section class="panel ledger-panel reveal" id="ledger-panel" hidden>
-      <div class="panel-head"><h2>Shared ledgers</h2><span class="hint">the org's task + progress brain</span></div>
+    <section class="panel reveal" id="ledger-panel" hidden>
+      <div class="phead">
+        <span class="pdx">04</span><h2 class="ptitle">Shared ledgers</h2>
+        <span class="prule"></span><span class="phint">the org's task + progress brain</span>
+      </div>
       <div class="ledgers">
-        <div class="ledger-col">
+        <div class="lcol">
           <h3>Task ledger</h3>
           <p class="l-plan" id="l-plan">—</p>
           <ul class="l-facts" id="l-facts"></ul>
         </div>
-        <div class="ledger-col">
+        <div class="lcol">
           <h3>Progress ledger</h3>
           <ul class="l-steps" id="l-steps"></ul>
         </div>
       </div>
     </section>
 
-    <!-- final result: boarding pass -->
-    <section class="final-wrap reveal" id="final-panel" hidden>
-      <div class="boarding-pass">
-        <div class="bp-stub">
-          <span class="bp-label">ATLAS</span>
-          <span class="bp-route" id="bp-route">RESULT</span>
-          <span class="bp-sub">delivered by the organisation</span>
-        </div>
-        <div class="bp-body markdown" id="final"></div>
+    <!-- deliverable -->
+    <section class="panel deliverable reveal" id="final-panel" hidden>
+      <div class="phead">
+        <span class="pdx">05</span><h2 class="ptitle">Deliverable</h2>
+        <span class="prule"></span><span class="phint" id="final-by">synthesised by the organisation</span>
       </div>
+      <div class="markdown" id="final"></div>
     </section>
   </main>
 
