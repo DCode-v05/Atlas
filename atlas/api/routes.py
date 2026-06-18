@@ -49,6 +49,16 @@ def agent_card(agent_id: str, request: Request):
     return agent_card_view(rt, agent_id)
 
 
+@router.get("/users")
+def users(request: Request):
+    """The human users of Atlas, each associated 1:1 with the agent they operate."""
+    rt = _rt(request)
+    return {
+        "count": len(rt.snapshot.users),
+        "users": [u.model_dump(mode="json") for u in rt.snapshot.users.values()],
+    }
+
+
 @router.get("/metrics")
 def metrics(request: Request):
     return _rt(request).metrics.snapshot()
@@ -103,7 +113,19 @@ async def prompt(request: Request, payload: dict = Body(...)):
     if not text:
         raise HTTPException(400, "prompt is required")
     human = payload.get("human") or "Operator"
-    return await rt.orchestrator.run_user_prompt(text, human)
+    # Optional: attribute the prompt to a specific human user (1:1 with an agent).
+    submitted_by = None
+    user_id = payload.get("user_id")
+    if user_id:
+        u = rt.snapshot.users.get(user_id)
+        if u is None:
+            raise HTTPException(404, "unknown user")
+        human = u.name
+        submitted_by = {"user_id": u.user_id, "name": u.name, "agent_id": u.agent_id}
+    result = await rt.orchestrator.run_user_prompt(text, human)
+    if submitted_by:
+        result["submitted_by"] = submitted_by
+    return result
 
 
 @router.post("/cron")

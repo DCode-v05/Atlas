@@ -11,7 +11,7 @@ Payload models document the shape of ``data`` for each event type.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -190,6 +190,7 @@ class CronTickPayload(BaseModel):
 class CronStatePayload(BaseModel):
     running: bool
     burst_seconds: float = 0.0
+    mode: Literal["burst", "continuous"] = "burst"
 
 
 class LlmStatusPayload(BaseModel):

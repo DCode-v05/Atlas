@@ -28,6 +28,7 @@ from atlas.org.ext_models import (
     Department,
     Level,
     OrgProfile,
+    User,
     profile_to_extension,
 )
 from atlas.org.taxonomy import (
@@ -39,6 +40,7 @@ from atlas.org.taxonomy import (
     SKILL_CATALOG,
     FIRST_NAMES,
     LAST_NAMES,
+    goal_for,
     leadership_skill,
     liaison_skill,
 )
@@ -53,6 +55,8 @@ class OrgSnapshot:
     projects: dict[str, list[str]]  # project_id -> member ids
     departments: dict[str, list[str]]  # dept value -> agent ids
     team_of: dict[str, str]  # agent_id -> team_id
+    users: dict[str, User]  # user_id -> human user (1:1 with an agent)
+    user_of_agent: dict[str, str]  # agent_id -> user_id
     org_lexicon: frozenset[str]
     ceo_id: str
 
@@ -143,6 +147,7 @@ def generate_org(seed: int) -> OrgSnapshot:
             role_title=role_title,
             level=level,
             clearance=int(level),
+            goal=goal_for(dept, level, role_title),
             reports_to=reports_to,
             security_cleared=dept in (Department.SECURITY, Department.EXEC),
         )
@@ -277,6 +282,21 @@ def generate_org(seed: int) -> OrgSnapshot:
         items[item_id] = item
         agents[owner].owned_items[item_id] = item
 
+    # ── Users: one human per agent, associated 1:1 (their standing assignment) ─
+    users: dict[str, User] = {}
+    user_of_agent: dict[str, str] = {}
+    for ag in agents.values():
+        uid = f"user-{ag.id}"
+        users[uid] = User(
+            user_id=uid,
+            name=ag.profile.human_name,
+            email=ag.profile.human_email,
+            agent_id=ag.id,
+            department=ag.profile.department,
+            role_title=ag.profile.role_title,
+        )
+        user_of_agent[ag.id] = uid
+
     # ── Org lexicon (scope gate) ───────────────────────────────────────────
     lexicon: set[str] = set(OPS_LEXICON)
     lexicon.update(d.value for d in Department)
@@ -294,6 +314,8 @@ def generate_org(seed: int) -> OrgSnapshot:
         projects=projects,
         departments=departments,
         team_of=team_of,
+        users=users,
+        user_of_agent=user_of_agent,
         org_lexicon=frozenset(lexicon),
         ceo_id=ceo_id,
     )

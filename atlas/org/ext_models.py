@@ -120,11 +120,28 @@ class OrgProfile(BaseModel):
     role_title: str
     level: Level
     clearance: int
+    goal: str = ""  # the agent's standing responsibility ("like humans have")
     reports_to: Optional[str] = None
     manages: list[str] = Field(default_factory=list)
     teams: list[str] = Field(default_factory=list)
     projects: list[str] = Field(default_factory=list)
     security_cleared: bool = False
+
+
+class User(BaseModel):
+    """A human user of Atlas, associated 1:1 with the agent that represents them.
+
+    Every agent has exactly one human behind it; that human is the ``User``. The
+    ``agent_id`` is the user's standing assignment — when this user submits a
+    prompt, it is attributed to them and to the agent they operate.
+    """
+
+    user_id: str
+    name: str
+    email: str
+    agent_id: str
+    department: Department
+    role_title: str
 
 
 class ContextItem(BaseModel):

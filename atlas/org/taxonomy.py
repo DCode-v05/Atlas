@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-from atlas.org.ext_models import Department, Scope, Sensitivity
+from atlas.org.ext_models import Department, Level, Scope, Sensitivity
 
 # ─── Department structure (counts sum to 100, incl. the CEO) ───────────────────
 
@@ -63,6 +63,81 @@ DEPT_SPECS: tuple[DeptSpec, ...] = (
 
 CEO_TITLE = "Chief Executive Officer"
 ORG_NAME = "Atlas"
+
+# ─── Per-agent goals (a standing responsibility, "like humans have") ───────────
+# Keyed by department, with a phrasing per seniority bucket: head / lead / ic.
+# The CEO is handled separately. These ride on each agent's OrgProfile.goal.
+
+CEO_GOAL = "Set company strategy and align every department toward the launch."
+
+GOAL_TEMPLATES: dict[Department, dict[str, str]] = {
+    Department.ENGINEERING: {
+        "head": "Own engineering delivery across atlas-core, billing and mobile.",
+        "lead": "Lead an engineering squad and unblock the team on the API.",
+        "ic": "Build and ship backend and service features for the product.",
+    },
+    Department.PRODUCT: {
+        "head": "Own the product roadmap and launch priorities.",
+        "lead": "Coordinate the product team on roadmap and release scope.",
+        "ic": "Define requirements and track metrics for product features.",
+    },
+    Department.QA: {
+        "head": "Own release quality and the testing sign-off process.",
+        "lead": "Coordinate test coverage and release verification.",
+        "ic": "Write and run tests and triage bugs before each release.",
+    },
+    Department.DEVOPS: {
+        "head": "Own reliability, infrastructure and incident response.",
+        "lead": "Coordinate on-call rotations and capacity planning.",
+        "ic": "Run CI/CD, monitor services and respond to incidents.",
+    },
+    Department.SALES: {
+        "head": "Own revenue targets and the enterprise sales pipeline.",
+        "lead": "Coordinate the sales team on deals and the forecast.",
+        "ic": "Manage accounts and close deals in the pipeline.",
+    },
+    Department.DESIGN: {
+        "head": "Own product design direction and the design system.",
+        "lead": "Coordinate design reviews and prototype quality.",
+        "ic": "Design UX and UI flows for web and mobile.",
+    },
+    Department.DATA: {
+        "head": "Own the data and ML strategy and experimentation.",
+        "lead": "Coordinate data-science work, models and metrics.",
+        "ic": "Build pipelines and models and run experiments.",
+    },
+    Department.MARKETING: {
+        "head": "Own go-to-market and the launch messaging.",
+        "lead": "Coordinate campaigns and release communications.",
+        "ic": "Produce content and run launch campaigns.",
+    },
+    Department.SUPPORT: {
+        "head": "Own customer support quality and escalations.",
+        "lead": "Coordinate the support queue and the knowledge base.",
+        "ic": "Resolve customer tickets and keep the knowledge base current.",
+    },
+    Department.SECURITY: {
+        "head": "Own security posture, audits and incident response.",
+        "lead": "Coordinate security reviews and vulnerability response.",
+        "ic": "Run security reviews and handle reported vulnerabilities.",
+    },
+    Department.HR: {
+        "head": "Own hiring, compensation and people operations.",
+        "lead": "Coordinate recruiting and people-ops processes.",
+        "ic": "Run recruiting and people-ops for the company.",
+    },
+}
+
+
+def goal_for(dept: Department, level: Level, role_title: str) -> str:
+    """The standing responsibility for an agent given its dept + seniority."""
+    if level == Level.CEO:
+        return CEO_GOAL
+    bucket = "head" if level == Level.DEPT_HEAD else ("lead" if level in (Level.MANAGER, Level.LEAD) else "ic")
+    dept_goals = GOAL_TEMPLATES.get(dept)
+    if dept_goals is None:  # pragma: no cover - all depts are covered above
+        return f"Contribute to {dept.value} as {role_title}."
+    return dept_goals[bucket]
 
 # ─── Skill catalogs: (name, description, tags) per department ──────────────────
 

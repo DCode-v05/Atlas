@@ -55,7 +55,7 @@ interface State {
   hitlResolvedCount: number;
   metricsTotals: Record<string, any>;
   metricsByCtx: Record<string, any>;
-  cron: { running: boolean; elapsed: number; remaining: number; planned?: string | null; burst: number };
+  cron: { running: boolean; elapsed: number; remaining: number; planned?: string | null; burst: number; mode: "burst" | "continuous" };
   feed: FeedItem[];
   gate: GateRejectedPayload | null;
   llm: LlmStatusPayload | null;
@@ -97,7 +97,7 @@ export const useStore = create<State>((set, get) => ({
   hitlResolvedCount: 0,
   metricsTotals: {},
   metricsByCtx: {},
-  cron: { running: false, elapsed: 0, remaining: 0, planned: null, burst: 30 },
+  cron: { running: false, elapsed: 0, remaining: 0, planned: null, burst: 15, mode: "burst" },
   feed: [],
   gate: null,
   llm: null,
@@ -310,11 +310,11 @@ export const useStore = create<State>((set, get) => ({
       }
 
       case "cron.tick":
-        set({ cron: { running: true, elapsed: d.elapsed, remaining: d.remaining, planned: d.planned, burst: get().cron.burst } });
+        set({ cron: { ...get().cron, running: true, elapsed: d.elapsed, remaining: d.remaining, planned: d.planned } });
         break;
 
       case "cron.state":
-        set({ cron: { ...get().cron, running: d.running, burst: d.burst_seconds || get().cron.burst } });
+        set({ cron: { ...get().cron, running: d.running, burst: d.burst_seconds || get().cron.burst, mode: d.mode ?? get().cron.mode } });
         pushFeed(d.running ? "Cron simulation started" : "Cron simulation stopped", "warn");
         break;
     }

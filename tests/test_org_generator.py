@@ -74,6 +74,38 @@ def test_all_agent_names_are_unique(org):
     assert len(set(names)) == 100, "agent names must be unique"
 
 
+def test_every_agent_has_a_goal(org):
+    """Each agent carries a standing responsibility ("like humans have")."""
+    for a in org.agents.values():
+        assert a.profile.goal, f"{a.id} has no goal"
+    # the goal round-trips through the Agent Card's org-profile extension
+    for a in org.agents.values():
+        assert org_profile_of(a.card).goal == a.profile.goal
+
+
+def test_goal_reflects_seniority(org):
+    ceo = org.agents[org.ceo_id]
+    assert "strategy" in ceo.profile.goal.lower()
+    head = org.agents[org.head_of(Department.ENGINEERING)]
+    ic = next(
+        a for a in org.agents.values()
+        if a.profile.department == Department.ENGINEERING and a.profile.level == Level.IC
+    )
+    assert head.profile.goal != ic.profile.goal
+
+
+def test_one_user_per_agent_assigned_1to1(org):
+    assert len(org.users) == 100
+    assert len(org.user_of_agent) == 100
+    # bijection: every user maps to a distinct, real agent and back
+    assert {u.agent_id for u in org.users.values()} == set(org.agents.keys())
+    for uid, user in org.users.items():
+        assert org.user_of_agent[user.agent_id] == uid
+        ag = org.agents[user.agent_id]
+        assert user.name == ag.profile.human_name
+        assert user.department == ag.profile.department
+
+
 def test_profile_round_trips_through_card(org):
     for a in org.agents.values():
         p = org_profile_of(a.card)

@@ -25,16 +25,18 @@ class Settings(BaseSettings):
     # Determinism: a single seed drives org generation and the cron sequence.
     seed: int = 42
 
-    # Cron simulation: while toggled on, agents autonomously launch one new goal
-    # every ``cron_goal_seconds`` (continuous, not a one-off burst), balanced
-    # across departments. Kept gentle so the rate-limited LLM isn't hammered.
-    cron_goal_seconds: float = 30.0
-    cron_tick_seconds: float = 1.0  # countdown-tick cadence for the UI
-    cron_max_inflight: int = 2      # load-shed: max concurrent goal scenarios
-    # legacy (the simulator now loops unconditionally while toggled on) — kept so
-    # old .env files / overrides don't error:
-    cron_burst_seconds: float = 15.0
-    cron_loop: bool = True
+    # Cron simulation. Two modes, selected by ``cron_loop``:
+    #   • burst (default): when toggled on it runs a single ~15s burst
+    #     (``cron_burst_seconds``) of autonomous goals, then auto-stops.
+    #   • continuous (``ATLAS_CRON_LOOP=true``): keeps launching goals until
+    #     toggled off.
+    # Either way goals are balanced across departments and paced gently so the
+    # rate-limited LLM isn't hammered.
+    cron_burst_seconds: float = 15.0  # length of a burst (spec: "on for 15 seconds")
+    cron_loop: bool = False           # False = 15s burst; True = continuous
+    cron_goal_seconds: float = 30.0   # inter-goal gap in continuous mode
+    cron_tick_seconds: float = 1.0    # countdown-tick cadence for the UI
+    cron_max_inflight: int = 2        # load-shed: max concurrent goal scenarios
 
     # Human-in-the-loop: 0 disables the auto-decision timeout (operator decides).
     hitl_timeout_seconds: float = 0.0

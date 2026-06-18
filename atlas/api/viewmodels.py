@@ -25,6 +25,8 @@ def build_org_view(rt) -> dict:
                 "id": ag.id,
                 "name": ag.name,
                 "role": p.role_title,
+                "goal": p.goal,
+                "user_id": rt.snapshot.user_of_agent.get(ag.id),
                 "department": p.department.value,
                 "level": int(p.level),
                 "clearance": p.clearance,
@@ -56,9 +58,13 @@ def build_org_view(rt) -> dict:
 
 def agent_card_view(rt, agent_id: str) -> dict:
     ag = rt.registry.get(agent_id)
+    user_id = rt.snapshot.user_of_agent.get(agent_id)
+    user = rt.snapshot.users.get(user_id) if user_id else None
     return {
         "card": ag.card.model_dump(mode="json"),
         "status": ag.status.value,
+        "goal": ag.profile.goal,
+        "user": user.model_dump(mode="json") if user else None,
         "owned_items": [
             {
                 "item_id": it.item_id,
