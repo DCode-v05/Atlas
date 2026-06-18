@@ -101,27 +101,31 @@ pipeline from autonomous, seeded agent-initiated tasks. **Metrics**
 (`atlas/metrics`) are computed at the Router: hops, messages, shared/redacted/
 denied, redundant-contacts-avoided, HITL escalations, distinct agents contacted.
 
-## LLM boundary (`atlas/llm`) — real Groq, required
+## LLM boundary (`atlas/llm`) — real Mistral on Amazon Bedrock, required
 
-`GroqProvider` (OpenAI-compatible) is the **only** provider and drives **both** the
-user-prompt and cron paths: it generates every agent message, re-ranks routing,
-and gives the tighten-only share judgement. A fast model (`llama-3.1-8b-instant`)
-handles per-message phrasing; a strong model (`llama-3.3-70b-versatile`) handles
-routing + the share decision. **`GROQ_API_KEY` is required — there is no simulated
-provider; without a key the app raises at startup.** Secret payloads are appended
-verbatim so the LLM can't drop them. A bounded-concurrency, self-healing circuit
-breaker keeps cron bursts within rate limits (the deterministic `phrasing.py`
-templates remain only as a per-message safety net if a live call momentarily fails
-— not a mode, not a provider).
+`BedrockProvider` is the **only** provider and drives **both** the user-prompt and
+cron paths: it generates every agent message, re-ranks routing, and gives the
+tighten-only share judgement via the Bedrock **Converse API** (boto3, run in a
+worker thread since boto3 is sync). Two configurable Mistral model ids
+(`ATLAS_BEDROCK_REASONING_MODEL` / `ATLAS_BEDROCK_PHRASING_MODEL`, default
+`mistral.mistral-large-2402-v1:0`). **AWS credentials are required — a Bedrock API
+key (`AWS_BEARER_TOKEN_BEDROCK`, bearer token) or classic access key/secret, plus a
+region; without them the app raises at startup.** Secret payloads are appended
+verbatim so the LLM can't drop them. Rate-limit safety: a **per-model token bucket
+with a small burst cap** (paces calls so a 100-agent cron burst can't storm Bedrock),
+concurrency limit, SDK retries off, and a self-healing cooldown on
+`ThrottlingException` — throttle state is emitted as an `llm.status` event. The
+`phrasing.py` templates remain only as a per-message safety net if a live call
+momentarily fails — not a mode, not a provider.
 
 ---
 
 ## Run it
 
-**Docker (single container — API + UI):** requires a Groq key.
+**Docker (single container — API + UI):** requires Bedrock credentials.
 ```bash
-echo "GROQ_API_KEY=gsk_..." > .env   # gitignored
-docker compose up --build            # → http://localhost:8000
+printf 'AWS_BEARER_TOKEN_BEDROCK=...\nAWS_REGION=us-east-1\n' > .env   # gitignored
+docker compose up --build                                            # → http://localhost:8000
 ```
 
 **Local dev:**
@@ -141,9 +145,10 @@ Tests inject an offline LLM double, so they run without a key.
 
 ## Key environment variables (`.env.example`)
 
-**`GROQ_API_KEY` (required)** · `ATLAS_SEED` (42) · `ATLAS_CRON_BURST_SECONDS` (15) ·
-`ATLAS_HITL_TIMEOUT_SECONDS` (0 = wait for operator) ·
-`ATLAS_GROQ_REASONING_MODEL` / `ATLAS_GROQ_PHRASING_MODEL` (model overrides).
+**`AWS_BEARER_TOKEN_BEDROCK`** (Bedrock API key) **or** `AWS_ACCESS_KEY_ID` +
+`AWS_SECRET_ACCESS_KEY` — **required** · `AWS_REGION` (us-east-1) · `ATLAS_SEED` (42) ·
+`ATLAS_CRON_BURST_SECONDS` (15) · `ATLAS_HITL_TIMEOUT_SECONDS` (0) ·
+`ATLAS_BEDROCK_REASONING_MODEL` / `ATLAS_BEDROCK_PHRASING_MODEL` (model overrides).
 
 ## Repo layout
 

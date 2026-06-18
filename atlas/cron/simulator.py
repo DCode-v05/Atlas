@@ -4,8 +4,8 @@ When toggled on, runs a ~15s burst where agents autonomously initiate tasks and
 communicate — a stand-in for manual user prompts. Crucially it drives the
 *identical* orchestrator pipeline, so policy, redaction, and HITL are enforced
 exactly as on the interactive path (escalations land in the same operator queue).
-It uses the same LLM as the interactive path — real Groq when a key is set,
-deterministic templates otherwise — while the burst sequence itself is seeded.
+It uses the same LLM as the interactive path — real Mistral (Amazon Bedrock) when
+credentials are set — while the burst sequence itself is seeded.
 """
 
 from __future__ import annotations

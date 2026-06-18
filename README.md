@@ -28,10 +28,10 @@ organisation-specific need-to-know policy layer on top.
 
 ## Quick start
 
-Atlas runs **real Groq agents** and requires a key (no simulated mode):
+Atlas runs **real Mistral on Amazon Bedrock** and requires credentials (no simulated mode):
 
 ```bash
-echo "GROQ_API_KEY=gsk_your_key_here" > .env    # gitignored; get one at console.groq.com/keys
+printf 'AWS_BEARER_TOKEN_BEDROCK=your-bedrock-api-key\nAWS_REGION=us-east-1\n' > .env   # gitignored
 
 # Single container (API + UI):
 docker compose up --build      # → http://localhost:8000
@@ -46,18 +46,21 @@ payment integration and get the API credentials"* → escalates to approval;
 *"What is the Q3 launch date?"* → redacted; *"What's the weather in Paris?"* →
 gated), or hit **SIMULATE** to watch the org light up.
 
-## Groq (required)
+## Amazon Bedrock — Mistral (required)
 
-Atlas runs **real Groq agents on every path** — user prompts *and* the cron
-simulation. The LLM generates every agent message, re-ranks routing, and makes
-the (tighten-only) share-vs-redact judgement. **There is no simulated mode**: set
-`GROQ_API_KEY` or the app exits with a clear error. Models are configurable
-(`ATLAS_GROQ_REASONING_MODEL`, `ATLAS_GROQ_PHRASING_MODEL`).
+Atlas runs **real Mistral on Amazon Bedrock on every path** — user prompts *and*
+the cron simulation. The LLM generates every agent message, re-ranks routing, and
+makes the (tighten-only) share-vs-redact judgement via the Bedrock **Converse API**.
+**There is no simulated mode**: set Bedrock credentials or the app exits with a clear
+error. Authenticate with a **Bedrock API key** (`AWS_BEARER_TOKEN_BEDROCK`) or classic
+AWS access key/secret, plus `AWS_REGION`. Model ids are configurable
+(`ATLAS_BEDROCK_REASONING_MODEL`, `ATLAS_BEDROCK_PHRASING_MODEL`) and must be enabled
+in your account/region.
 
 ## Tech
 
 Python · FastAPI · Pydantic v2 · SSE · React 18 · Vite · TypeScript · Tailwind ·
-react-force-graph · Zustand · Groq (optional).
+react-force-graph · Zustand · Amazon Bedrock (Mistral, via boto3 Converse).
 
 See **[CLAUDE.md](./CLAUDE.md)** for the architecture, the need-to-know policy
 matrix, and the full design. `uv run pytest` runs the test suite.

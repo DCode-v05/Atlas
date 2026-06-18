@@ -8,8 +8,12 @@ services:
     environment:
       ATLAS_SEED: "42"
       ATLAS_CRON_BURST_SECONDS: "15"
-      # REQUIRED: Atlas runs real Groq agents (user prompts AND cron) — there is
-      # NO simulated fallback. Without this the container starts then exits with a
-      # clear error. Put GROQ_API_KEY=gsk_... in a .env next to this file (gitignored).
-      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      # REQUIRED: Atlas runs real Mistral via Amazon Bedrock (user prompts AND cron)
+      # — NO simulated fallback. Put your Bedrock API key (or AWS creds) in a .env
+      # next to this file; without it the container starts then exits with a clear error.
+      AWS_BEARER_TOKEN_BEDROCK: ${AWS_BEARER_TOKEN_BEDROCK:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
     restart: "no"

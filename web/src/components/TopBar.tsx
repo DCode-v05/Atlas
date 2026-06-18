@@ -121,9 +121,10 @@ function LlmPill({ llm }: { llm: any }) {
   const throttled = !!llm?.throttled;
   const offline = llm?.provider === "offline";
   const color = offline ? "var(--faint)" : throttled ? "var(--gold)" : "var(--accent)";
-  const label = offline ? "OFFLINE" : throttled ? "THROTTLED" : "GROQ";
+  const prov = (llm?.provider ?? "llm").toUpperCase();
+  const label = throttled ? "THROTTLED" : prov;
   const title = llm
-    ? `Groq — ok ${llm.calls_ok} · throttled ${llm.calls_throttled} · 429 ${llm.calls_429}${llm.reason ? `\n${llm.reason}` : ""}`
+    ? `${prov} — ok ${llm.calls_ok} · throttled ${llm.calls_throttled} · 429 ${llm.calls_429}${llm.reason ? `\n${llm.reason}` : ""}`
     : "LLM status";
   return (
     <div

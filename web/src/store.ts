@@ -283,7 +283,7 @@ export const useStore = create<State>((set, get) => ({
       case "llm.status": {
         const prev = get().llm;
         set({ llm: d as LlmStatusPayload });
-        if (d.throttled && !prev?.throttled) pushFeed(`Groq throttled — ${d.reason || "rate limited"}`, "warn");
+        if (d.throttled && !prev?.throttled) pushFeed(`Bedrock throttled — ${d.reason || "rate limited"}`, "warn");
         break;
       }
 

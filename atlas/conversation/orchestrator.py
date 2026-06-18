@@ -6,7 +6,7 @@ It runs the SAME pipeline for a user prompt and for a cron-simulated task:
     for each source: ask (with intent) → policy decides → share / redact /
     deny / escalate-to-HITL → remember → finalize the task.
 
-When a Groq key is configured, the LLM is the real engine on BOTH paths: it
+When AWS credentials are configured, the LLM is the real engine on BOTH paths: it
 generates every agent message, re-ranks routing, and gives the tighten-only
 share judgement. The deterministic templates remain only as an automatic
 fallback when no key is set (so the app still boots offline). Secret payloads
@@ -507,7 +507,7 @@ class Orchestrator:
         )
 
     async def _say(self, kind: str, template: str, ctx: dict) -> str:
-        """LLM-author the message when Groq is available; else the template."""
+        """LLM-author the message when the provider is available; else the template."""
         if self.llm.available:
             try:
                 out = await self.llm.phrase(kind, ctx)

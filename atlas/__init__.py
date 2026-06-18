@@ -13,7 +13,7 @@ The package is organised in layers (see CLAUDE.md):
   conversation/ threads, group sessions, per-agent memory, intent
   hitl/         the single global human-in-the-loop approval queue
   cron/         the simulation engine (15s autonomous burst)
-  llm/          the swappable intelligence boundary (simulated + Groq)
+  llm/          the swappable intelligence boundary (Mistral on Amazon Bedrock)
   metrics/      communication-efficiency metrics
   events/       the SSE event schema + broker (the frontend contract)
   api/          the external HTTP edge (REST + SSE)

@@ -1,20 +1,24 @@
-"""Groq-backed LLM provider — the REAL engine for agent communication.
+"""Amazon Bedrock (Mistral) provider — the REAL engine for agent communication.
 
-Rate-limit safety (the important part for 100-agent cron bursts):
-- a **per-model token bucket** caps requests/minute *before* any call is made, so
-  we never storm the API — over-budget calls skip straight to the template
-  fallback instead of getting 429s;
-- a **concurrency limiter** bounds parallel requests;
-- the SDK's own auto-retry is **disabled** (it would amplify a burst);
-- a real 429 trips a short **cooldown**, and the provider self-heals;
-- whenever throttling turns on/off it emits an ``llm.status`` event so the UI can
-  show it.
+Uses the Bedrock **Converse API** (unified message format) via boto3. boto3 is
+synchronous, so each call runs in a worker thread (``asyncio.to_thread``) to keep
+the event loop free. Converse (not ConverseStream) is used because the
+orchestrator awaits complete messages.
+
+Rate-limit safety (for 100-agent cron bursts):
+- a **per-model token bucket** with a small burst cap → calls are paced, not
+  fired all at once, so we don't trip Bedrock throttling;
+- a **concurrency limiter**; the SDK's own retries are disabled;
+- a Bedrock ``ThrottlingException`` trips a short self-healing cooldown;
+- throttle on/off emits an ``llm.status`` event for the UI.
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 import re
+import sys
 import time
 from typing import Optional
 
@@ -37,19 +41,22 @@ _SYS = (
 )
 
 
-def _is_rate_limit(exc: Exception) -> bool:
-    if exc.__class__.__name__ == "RateLimitError":
+def _is_throttle(exc: Exception) -> bool:
+    code = None
+    resp = getattr(exc, "response", None)
+    if isinstance(resp, dict):
+        code = resp.get("Error", {}).get("Code")
+    if code in ("ThrottlingException", "TooManyRequestsException", "ServiceQuotaExceededException"):
         return True
-    if getattr(exc, "status_code", None) == 429:
+    if exc.__class__.__name__ in ("ThrottlingException", "TooManyRequestsException"):
         return True
-    text = str(exc).lower()
-    return "429" in text or "rate limit" in text or "rate_limit" in text
+    t = str(exc).lower()
+    return "throttl" in t or "too many requests" in t or "rate exceeded" in t
 
 
 class _TokenBucket:
-    """Refilling token bucket. ``capacity`` is the max instantaneous burst;
-    it refills at ``rpm``/60 tokens per second — so after the burst, calls are
-    paced to the steady rate instead of all firing at once."""
+    """Refilling token bucket. ``capacity`` is the max instantaneous burst; it
+    refills at ``rpm``/60 tokens/sec so calls are paced after the burst."""
 
     def __init__(self, rpm: int, burst: int) -> None:
         self.capacity = float(max(1, burst))
@@ -67,27 +74,51 @@ class _TokenBucket:
         return False
 
 
-class GroqProvider(LLMProvider):
-    name = "groq"
+class BedrockProvider(LLMProvider):
+    name = "bedrock"
 
     def __init__(
         self,
         *,
-        api_key: str,
+        region: str,
         reasoning_model: str,
         phrasing_model: str,
+        api_key: Optional[str] = None,
+        access_key: Optional[str] = None,
+        secret_key: Optional[str] = None,
+        session_token: Optional[str] = None,
         rpm: int = 22,
         burst: int = 5,
         max_concurrency: int = 2,
-        timeout: float = 12.0,
+        timeout: float = 20.0,
         max_failures: int = 4,
         cooldown: float = 15.0,
         broker: Optional[EventBroker] = None,
     ) -> None:
-        from groq import AsyncGroq  # lazy import so the dep is optional
+        import boto3
+        from botocore.config import Config as BotoConfig
 
-        # max_retries=0: WE handle backoff/throttle; the SDK retrying would amplify bursts.
-        self.client = AsyncGroq(api_key=api_key, timeout=timeout, max_retries=0)
+        # max_attempts=1 → no SDK retries (we handle backoff/throttle ourselves).
+        cfg = BotoConfig(retries={"max_attempts": 1, "mode": "standard"}, read_timeout=timeout, connect_timeout=10)
+        if api_key:
+            # Bedrock API key (bearer token) — boto3 auto-detects this env var.
+            os.environ["AWS_BEARER_TOKEN_BEDROCK"] = api_key
+            self.client = boto3.client("bedrock-runtime", region_name=region, config=cfg)
+        else:
+            # No bearer token: make sure a stale/empty AWS_BEARER_TOKEN_BEDROCK doesn't
+            # force bearer auth over the SigV4 access-key/secret credentials.
+            os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
+            if access_key and secret_key:
+                kwargs: dict = {
+                    "region_name": region, "config": cfg,
+                    "aws_access_key_id": access_key, "aws_secret_access_key": secret_key,
+                }
+                if session_token:
+                    kwargs["aws_session_token"] = session_token
+                self.client = boto3.client("bedrock-runtime", **kwargs)
+            else:
+                self.client = boto3.client("bedrock-runtime", region_name=region, config=cfg)
+
         self.reasoning_model = reasoning_model
         self.phrasing_model = phrasing_model
         self._rpm = rpm
@@ -100,6 +131,7 @@ class GroqProvider(LLMProvider):
         self._fail = 0
         self._disabled_until = 0.0
         self._throttled = False
+        self._last_error = ""
         self.calls_ok = 0
         self.calls_throttled = 0
         self.calls_429 = 0
@@ -123,8 +155,7 @@ class GroqProvider(LLMProvider):
     def _emit(self, reason: str) -> None:
         if self._broker is None:
             return
-        s = self.status()
-        self._broker.emit(EventType.LLM_STATUS, LlmStatusPayload(reason=reason, **s))
+        self._broker.emit(EventType.LLM_STATUS, LlmStatusPayload(reason=reason, **self.status()))
 
     def _set_throttled(self, value: bool, reason: str) -> None:
         if value != self._throttled:
@@ -139,8 +170,17 @@ class GroqProvider(LLMProvider):
         return b
 
     # ── the gated call ─────────────────────────────────────────────────────
+    def _converse(self, model: str, system: str, user: str, max_tokens: int, temperature: float) -> Optional[str]:
+        resp = self.client.converse(
+            modelId=model,
+            system=[{"text": system}],
+            messages=[{"role": "user", "content": [{"text": user}]}],
+            inferenceConfig={"maxTokens": int(max_tokens), "temperature": float(temperature), "topP": 0.9},
+        )
+        return resp["output"]["message"]["content"][0]["text"]
+
     async def _chat(self, model: str, system: str, user: str, *, max_tokens: int, temperature: float) -> Optional[str]:
-        if not self.available:  # in cooldown after a 429
+        if not self.available:  # in cooldown after throttling
             self.calls_throttled += 1
             return None
         if not self._bucket(model).take():  # proactive throttle — no API call made
@@ -149,27 +189,24 @@ class GroqProvider(LLMProvider):
             return None
         try:
             async with self._sem:
-                resp = await self.client.chat.completions.create(
-                    model=model,
-                    messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                )
+                text = await asyncio.to_thread(self._converse, model, system, user, max_tokens, temperature)
             self.calls_ok += 1
             self._fail = 0
-            self._set_throttled(False, "Groq recovered")
-            content = resp.choices[0].message.content
-            return content.strip() if content else None
+            self._set_throttled(False, "Bedrock recovered")
+            return text.strip() if text else None
         except Exception as exc:
-            if _is_rate_limit(exc):
+            if _is_throttle(exc):
                 self.calls_429 += 1
                 self._disabled_until = time.monotonic() + self._cooldown
-                self._set_throttled(True, "Groq returned 429 (rate limited) — backing off")
+                self._set_throttled(True, "Bedrock throttled (rate limited) — backing off")
                 return None
             self._fail += 1
+            self._last_error = f"{type(exc).__name__}: {exc}"[:240]
+            if self._fail <= 3:  # surface the real cause (model access / region / creds)
+                print(f"[atlas.bedrock] Converse failed on '{model}': {self._last_error}", file=sys.stderr, flush=True)
             if self._fail >= self._max_failures:
                 self._disabled_until = time.monotonic() + self._cooldown
-                self._set_throttled(True, "repeated Groq errors — backing off")
+                self._set_throttled(True, f"Bedrock error — {self._last_error}")
             return None
 
     # ── per-message phrasing (fast model) ──────────────────────────────────

@@ -1,6 +1,6 @@
 """Deterministic message templates.
 
-These are the default words agents say. When Groq is enabled on the interactive
+These are the default words agents say. When the LLM is enabled on the interactive
 path the orchestrator may rephrase these into more natural prose, but the
 structural behavior (who says what, and what's shared vs withheld) is identical
 with or without an LLM — so the demo is fully meaningful offline.

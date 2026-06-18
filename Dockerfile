@@ -21,8 +21,7 @@ RUN pip install --no-cache-dir \
     "pydantic>=2.7" \
     "pydantic-settings>=2.3" \
     "sse-starlette>=2.1" \
-    "groq>=0.11" \
-    "httpx>=0.27"
+    "boto3>=1.40"
 
 COPY pyproject.toml ./
 COPY atlas/ ./atlas/

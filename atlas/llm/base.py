@@ -1,9 +1,9 @@
 """The LLM boundary.
 
 A clean seam so the orchestrator never depends on a vendor directly. The only
-provider is :class:`~atlas.llm.groq_provider.GroqProvider` — there is no
-simulated provider. A ``GROQ_API_KEY`` is required (enforced in
-``atlas/llm/__init__.py``); without one the app raises at startup.
+provider is :class:`~atlas.llm.bedrock_provider.BedrockProvider` (Mistral on
+Amazon Bedrock) — there is no simulated provider. AWS credentials are required
+(enforced in ``atlas/llm/__init__.py``); without them the app raises at startup.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from atlas.org.ext_models import ContextItem, Intent, OrgProfile, ShareOutcome
 
 
 class LLMProvider:
-    """Interface implemented by the real Groq provider (for typing)."""
+    """Interface implemented by the real Bedrock provider (for typing)."""
 
     name: str = "llm"
 

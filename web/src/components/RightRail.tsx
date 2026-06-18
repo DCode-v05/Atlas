@@ -21,7 +21,7 @@ function ThrottleBanner() {
     <div className="m-2.5 mb-0 rounded-lg px-3 py-2 flex items-start gap-2 animate-slide-in" style={{ background: "rgba(243,182,100,0.1)", border: "1px solid var(--gold)", boxShadow: "0 0 18px -8px var(--gold)" }}>
       <Zap size={14} color="var(--gold)" className="animate-flicker shrink-0 mt-0.5" />
       <div className="min-w-0">
-        <div className="text-[11px] font-semibold" style={{ color: "var(--gold)" }}>Groq rate-limited</div>
+        <div className="text-[11px] font-semibold" style={{ color: "var(--gold)" }}>Bedrock rate-limited</div>
         <div className="text-[10px] text-muted leading-snug">{llm.reason || "throttling to stay within limits"}</div>
         <div className="mono text-[9px] text-faint mt-0.5">ok {llm.calls_ok} · throttled {llm.calls_throttled} · 429 {llm.calls_429}</div>
       </div>

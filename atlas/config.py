@@ -1,8 +1,8 @@
 """Runtime configuration for Atlas.
 
 Settings come from environment variables (prefixed ``ATLAS_``) and an optional
-``.env`` file. ``GROQ_API_KEY`` is **required** — Atlas runs real Groq agents and
-has no simulated fallback; without a key the app refuses to start.
+``.env`` file. Atlas runs real **Mistral on Amazon Bedrock** — AWS credentials
+are **required**; without them the app refuses to start (no simulated fallback).
 """
 
 from __future__ import annotations
@@ -25,11 +25,11 @@ class Settings(BaseSettings):
     # Determinism: a single seed drives org generation and the cron sequence.
     seed: int = 42
 
-    # Cron simulation.
+    # Cron simulation (kept gentle so the LLM isn't hammered).
     cron_burst_seconds: float = 15.0
     cron_tick_seconds: float = 2.0
     cron_loop: bool = False
-    cron_max_inflight: int = 1  # max concurrent simulated scenarios (load-shedding)
+    cron_max_inflight: int = 1
 
     # Human-in-the-loop: 0 disables the auto-decision timeout (operator decides).
     hitl_timeout_seconds: float = 0.0
@@ -38,20 +38,35 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
-    # Groq — REQUIRED. Conventional un-prefixed name (also read by the SDK).
-    groq_api_key: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("GROQ_API_KEY", "ATLAS_GROQ_API_KEY"),
+    # ─── Amazon Bedrock (Mistral) — REQUIRED ──────────────────────────────────
+    aws_region: str = Field(
+        default="us-east-1",
+        validation_alias=AliasChoices("AWS_REGION", "AWS_DEFAULT_REGION", "ATLAS_AWS_REGION"),
     )
-    groq_reasoning_model: str = "llama-3.3-70b-versatile"
-    groq_phrasing_model: str = "llama-3.1-8b-instant"
-    # Throttling — protects against Groq rate limits. ``groq_rpm`` is the per-model
-    # steady refill (requests/minute; free tier ≈ 30, also bounded by tokens/min).
-    # ``groq_burst`` caps the *instantaneous* burst so calls are paced, not fired
-    # all at once. Raise both on a paid tier.
-    groq_rpm: int = 22
-    groq_burst: int = 5
-    groq_max_concurrency: int = 2
+    # Preferred: a Bedrock API key (bearer token). boto3 reads AWS_BEARER_TOKEN_BEDROCK.
+    bedrock_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("AWS_BEARER_TOKEN_BEDROCK", "ATLAS_BEDROCK_API_KEY"),
+    )
+    # Fallback: classic AWS access key / secret (conventional names; boto3 reads them).
+    aws_access_key_id: str | None = Field(
+        default=None, validation_alias=AliasChoices("AWS_ACCESS_KEY_ID", "ATLAS_AWS_ACCESS_KEY_ID")
+    )
+    aws_secret_access_key: str | None = Field(
+        default=None, validation_alias=AliasChoices("AWS_SECRET_ACCESS_KEY", "ATLAS_AWS_SECRET_ACCESS_KEY")
+    )
+    aws_session_token: str | None = Field(
+        default=None, validation_alias=AliasChoices("AWS_SESSION_TOKEN", "ATLAS_AWS_SESSION_TOKEN")
+    )
+    # Bedrock Mistral model ids (must be enabled in your account + region).
+    bedrock_reasoning_model: str = "mistral.mistral-large-2402-v1:0"
+    bedrock_phrasing_model: str = "mistral.mistral-large-2402-v1:0"
+
+    # Throttling — protects against Bedrock rate limits. ``rpm`` is the per-model
+    # steady refill; ``burst`` caps the instantaneous burst so calls are paced.
+    bedrock_rpm: int = 22
+    bedrock_burst: int = 5
+    bedrock_max_concurrency: int = 2
 
 
 @lru_cache(maxsize=1)
