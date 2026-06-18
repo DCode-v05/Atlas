@@ -124,6 +124,9 @@ class BedrockProvider(LLMProvider):
         self._rpm = rpm
         self._burst = burst
         self._buckets: dict[str, _TokenBucket] = {}
+        # Some Mistral models (e.g. Mixtral 8x7B) reject a Converse `system` block.
+        # We learn that per-model on first use and fold system into the user turn.
+        self._no_system_models: set[str] = set()
         self._sem = asyncio.Semaphore(max_concurrency)
         self._broker = broker
         self._max_failures = max_failures
@@ -171,12 +174,32 @@ class BedrockProvider(LLMProvider):
 
     # ── the gated call ─────────────────────────────────────────────────────
     def _converse(self, model: str, system: str, user: str, max_tokens: int, temperature: float) -> Optional[str]:
-        resp = self.client.converse(
-            modelId=model,
-            system=[{"text": system}],
-            messages=[{"role": "user", "content": [{"text": user}]}],
-            inferenceConfig={"maxTokens": int(max_tokens), "temperature": float(temperature), "topP": 0.9},
-        )
+        inference = {"maxTokens": int(max_tokens), "temperature": float(temperature), "topP": 0.9}
+
+        def _call(fold_system: bool):
+            if fold_system:
+                return self.client.converse(
+                    modelId=model,
+                    messages=[{"role": "user", "content": [{"text": f"{system}\n\n{user}"}]}],
+                    inferenceConfig=inference,
+                )
+            return self.client.converse(
+                modelId=model,
+                system=[{"text": system}],
+                messages=[{"role": "user", "content": [{"text": user}]}],
+                inferenceConfig=inference,
+            )
+
+        if model in self._no_system_models:
+            resp = _call(fold_system=True)
+        else:
+            try:
+                resp = _call(fold_system=False)
+            except Exception as exc:  # model rejects a system block → fold it into the user turn
+                if "system message" not in str(exc).lower():
+                    raise
+                self._no_system_models.add(model)
+                resp = _call(fold_system=True)
         return resp["output"]["message"]["content"][0]["text"]
 
     async def _chat(self, model: str, system: str, user: str, *, max_tokens: int, temperature: float) -> Optional[str]:
