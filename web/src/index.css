@@ -1,0 +1,159 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ════════════════════════════════════════════════════════════════════════════
+   ATLAS — "Obsidian Observatory"
+   A premium deep-space telemetry instrument. Glass panels float over an obsidian
+   field lit by a soft aurora dome, with a fine constellation grid and grain.
+   ════════════════════════════════════════════════════════════════════════════ */
+:root {
+  /* base field */
+  --bg: #07090e;
+  --bg-2: #0a0d13;
+  --void: #050609;
+
+  /* glass surfaces (translucent — grain & glow show through) */
+  --surface: rgba(18, 24, 32, 0.62);
+  --surface-2: rgba(23, 30, 40, 0.7);
+  --panel: rgba(14, 19, 26, 0.66);
+  --panel-solid: #0e131a;
+  --inset: rgba(0, 0, 0, 0.35);
+  --hi: rgba(255, 255, 255, 0.055); /* top highlight */
+
+  /* strokes */
+  --border: rgba(150, 180, 200, 0.1);
+  --border-bright: rgba(160, 190, 210, 0.2);
+
+  /* ink */
+  --text: #e8eef4;
+  --text-2: #b3bECB;
+  --muted: #8794a3;
+  --faint: #586472;
+
+  /* signal accent — aurora mint (live / interactive / shared) */
+  --accent: #6ee7c7;
+  --accent-bright: #8af5d6;
+  --accent-soft: rgba(110, 231, 199, 0.13);
+  --accent-glow: rgba(110, 231, 199, 0.45);
+
+  /* warm + semantic */
+  --gold: #f3b664;    /* cron / simulation */
+  --violet: #b79cff;  /* human-in-the-loop */
+  --coral: #ff6b81;   /* alert / denied */
+  --amber: #f2b366;   /* redacted / caution */
+  --ok: #6ee7c7;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: "Hanken Grotesk", system-ui, sans-serif;
+  font-size: 13px;
+  letter-spacing: 0.005em;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+  background-image:
+    /* observatory dome glow */
+    radial-gradient(80% 55% at 50% -8%, rgba(110, 231, 199, 0.07), transparent 60%),
+    radial-gradient(60% 50% at 92% 8%, rgba(183, 156, 255, 0.05), transparent 55%),
+    radial-gradient(70% 60% at 6% 100%, rgba(243, 182, 100, 0.04), transparent 55%),
+    /* constellation dotted grid */
+    radial-gradient(rgba(150, 180, 210, 0.06) 1px, transparent 1.4px),
+    linear-gradient(180deg, var(--bg) 0%, var(--void) 100%);
+  background-size: 100% 100%, 100% 100%, 100% 100%, 34px 34px, 100% 100%;
+}
+
+/* grain + faint vignette overlay */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  background-image:
+    radial-gradient(130% 110% at 50% 50%, transparent 62%, rgba(0, 0, 0, 0.5) 100%),
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.012) 0, rgba(255, 255, 255, 0.012) 1px, transparent 1px, transparent 3px);
+  mix-blend-mode: soft-light;
+}
+
+/* ─── glass chrome ─────────────────────────────────────────────────────────── */
+.glass {
+  background:
+    linear-gradient(180deg, var(--hi), transparent 14%),
+    linear-gradient(180deg, var(--surface), var(--panel));
+  border: 1px solid var(--border);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.04),
+    inset 0 0 24px -16px rgba(110, 231, 199, 0.15),
+    0 14px 40px -22px rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(10px) saturate(1.1);
+}
+.glass-flat {
+  background: linear-gradient(180deg, var(--surface), var(--panel));
+  border: 1px solid var(--border);
+}
+.inset {
+  background: var(--inset);
+  border: 1px solid rgba(0, 0, 0, 0.4);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+.hairline { border-color: var(--border); }
+.lume { box-shadow: 0 0 0 1px var(--accent-soft), 0 0 22px -6px var(--accent-glow); }
+
+/* type helpers */
+.font-display { font-family: "Syne", sans-serif; letter-spacing: -0.01em; }
+.mono { font-family: "Spline Sans Mono", ui-monospace, monospace; font-feature-settings: "tnum"; }
+.tnum { font-variant-numeric: tabular-nums; }
+.eyebrow {
+  font-family: "Spline Sans Mono", monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.brand-glow { text-shadow: 0 0 20px var(--accent-glow), 0 0 2px rgba(110, 231, 199, 0.4); }
+
+input, button, textarea { font-family: inherit; }
+input::placeholder { color: var(--faint); }
+button { cursor: pointer; }
+
+/* ─── scrollbars ─────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(150, 180, 200, 0.16); border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(150, 180, 200, 0.3); }
+
+/* ─── keyframes ───────────────────────────────────────────────────────────── */
+@keyframes pulse-ring { 0% { transform: scale(0.85); opacity: 0.7; } 100% { transform: scale(2); opacity: 0; } }
+@keyframes flicker { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+@keyframes rise { from { transform: translateY(10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@keyframes slide-in { from { transform: translateX(16px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+@keyframes sheen { 0% { background-position: -160% 0; } 100% { background-position: 260% 0; } }
+@keyframes drift { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
+
+.animate-pulse-ring { animation: pulse-ring 1.7s ease-out infinite; }
+.animate-flicker { animation: flicker 1.8s ease-in-out infinite; }
+.animate-rise { animation: rise 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.animate-slide-in { animation: slide-in 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+
+/* shimmer sweep used on the brand + live accents */
+.sheen {
+  background: linear-gradient(100deg, transparent 30%, rgba(110, 231, 199, 0.5) 50%, transparent 70%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: sheen 6s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

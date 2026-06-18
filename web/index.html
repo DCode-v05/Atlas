@@ -1,114 +1,18 @@
 <!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ATLAS · Signal Deck</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles.css" />
-</head>
-<body>
-  <div class="grain" aria-hidden="true"></div>
-
-  <header class="deck-top">
-    <div class="wordmark">
-      <span class="mark">A</span>
-      <div>
-        <h1>ATLAS</h1>
-        <p>Signal Deck · Organisation of Agents</p>
-      </div>
-    </div>
-    <div class="sysline">
-      <span class="chip-tag">A2A · JSON-RPC 0.3.0</span>
-      <span class="chip-tag">GROUP TOPOLOGY</span>
-      <span id="llm-badge" class="badge">connecting…</span>
-    </div>
-  </header>
-
-  <main>
-    <!-- mission console -->
-    <section class="panel console reveal" style="--d:0">
-      <label class="console-label" for="mission">Mission directive</label>
-      <form id="run-form" class="console-form">
-        <textarea id="mission" rows="2"
-          placeholder="Give the organisation a mission — e.g. Design and spec a privacy-first smart doorbell"></textarea>
-        <button id="go" type="submit"><span class="go-label">Deploy</span><span class="go-arrow">▸</span></button>
-      </form>
-      <div class="chips" id="examples"></div>
-      <div class="caps" id="caps"></div>
-    </section>
-
-    <!-- HUD metrics -->
-    <section class="hud reveal" id="metrics" style="--d:1" hidden>
-      <div class="stat"><span class="sv" id="m-messages">0</span><span class="sk">messages</span></div>
-      <div class="stat"><span class="sv" id="m-headcount">0</span><span class="sk">headcount</span></div>
-      <div class="stat"><span class="sv" id="m-depth">0</span><span class="sk">max depth</span></div>
-      <div class="stat"><span class="sv" id="m-tokens">0</span><span class="sk">tokens</span></div>
-      <div class="stat"><span class="sv" id="m-elapsed">0.0s</span><span class="sk">elapsed</span></div>
-    </section>
-
-    <!-- org graph + signal feed -->
-    <section class="deck">
-      <div class="panel reveal" style="--d:2">
-        <div class="phead">
-          <span class="pdx">02</span><h2 class="ptitle">Org graph</h2>
-          <span class="prule"></span><span class="phint">grows as agents are hired</span>
-        </div>
-        <div class="canvas" id="canvas">
-          <svg id="edges" preserveAspectRatio="none" aria-hidden="true"></svg>
-        </div>
-        <div class="legend" id="legend"></div>
-      </div>
-
-      <div class="panel feed-panel reveal" style="--d:3">
-        <div class="phead">
-          <span class="pdx">03</span><h2 class="ptitle">Signal feed</h2>
-          <span class="prule"></span><span class="phint">A2A · performatives</span>
-        </div>
-        <div class="feed" id="feed"><div class="feed-empty">The wire is quiet. Deploy a mission.</div></div>
-      </div>
-    </section>
-
-    <!-- agent cards (A2A discovery) -->
-    <section class="panel reveal" id="cards-panel" hidden>
-      <div class="phead">
-        <span class="pdx">04</span><h2 class="ptitle">Agent cards</h2>
-        <span class="prule"></span><span class="phint">discovered via /.well-known/agent-card.json</span>
-      </div>
-      <div class="agent-cards" id="agent-cards"></div>
-    </section>
-
-    <!-- shared ledgers -->
-    <section class="panel reveal" id="ledger-panel" hidden>
-      <div class="phead">
-        <span class="pdx">05</span><h2 class="ptitle">Shared ledgers</h2>
-        <span class="prule"></span><span class="phint">the org's task + progress brain</span>
-      </div>
-      <div class="ledgers">
-        <div class="lcol">
-          <h3>Task ledger</h3>
-          <p class="l-plan" id="l-plan">—</p>
-          <ul class="l-facts" id="l-facts"></ul>
-        </div>
-        <div class="lcol">
-          <h3>Progress ledger</h3>
-          <ul class="l-steps" id="l-steps"></ul>
-        </div>
-      </div>
-    </section>
-
-    <!-- deliverable -->
-    <section class="panel deliverable reveal" id="final-panel" hidden>
-      <div class="phead">
-        <span class="pdx">06</span><h2 class="ptitle">Deliverable</h2>
-        <span class="prule"></span><span class="phint" id="final-by">synthesised by the organisation</span>
-      </div>
-      <div class="markdown" id="final"></div>
-    </section>
-  </main>
-
-  <script src="/app.js"></script>
-</body>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ATLAS — Agent Observatory</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=Spline+Sans+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>

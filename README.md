@@ -1,45 +1,63 @@
-# ATLAS — an Organisation of Communicating A2A Agents
+# ⚡ Atlas — A2A Control Tower
 
-Give the organisation a **mission**. A **lead agent — named for the mission**
-(e.g. *"Festival Director"*) — decomposes it and **hires** general-knowledge agents
-by Contract-Net auction, conferring roles on them *through conversation*. Managers
-recursively form sub-teams; the team then collaborates in **group meetings** over a
-real, hand-rolled **A2A** protocol — and you watch every message, performative,
-meeting and metric live on the **Signal Deck** UI.
+A real-time **mission-control dashboard** that visualizes **agent-to-agent (A2A)
+communication** inside a simulated software company of **100 AI agents**.
 
-A learning prototype focused on **agent-to-agent communication**:
+Atlas is about **how agents communicate like humans** — discovering each other,
+sharing only what's needed-to-know, redacting or escalating sensitive data to a
+human, coordinating 1:1 vs in groups, and carrying *intent* on every message —
+not about how well they finish tasks. It implements the
+[A2A protocol](https://a2a-protocol.org) faithfully in-process, with an
+organisation-specific need-to-know policy layer on top.
 
-- **Group collaboration** — the team works in shared meeting threads (one `contextId`).
-- **Message-protocol design** — every message carries a FIPA *performative* plus the
-  sender's *role*, *intent* and *motivation* (BDI), as an explicit A2A extension.
-- **Contract-Net hiring** — roles are won by auction (`cfp → propose → accept / refuse`).
-- **Coordination metrics + ledgers** — messages / tokens / depth / headcount per run;
-  a Magentic-style Task + Progress ledger threaded by `contextId`.
+## What you can see & do
+
+- **100 agents** across 12 departments with a real hierarchy, each an A2A
+  **Agent Card** with skills, clearance, and private/sensitive context.
+- **Live communication graph** — who is talking to whom, individually vs in
+  groups, with edges colored by **intent** and **outcome** (shared / redacted /
+  withheld / awaiting-approval).
+- **Task an agent** with a prompt → watch it get routed, discover colleagues,
+  and request context — with sensitive items **redacted** or **escalated**.
+- **Human-in-the-loop queue** — approve / redact / deny sensitive shares as the
+  single control-tower operator.
+- **Out-of-scope gate** — prompts unrelated to the company are blocked.
+- **Cron simulation** — toggle a 15-second burst of autonomous agent activity.
+- **Coordination-efficiency metrics** — hops, messages, shared vs redacted vs
+  withheld, redundant contacts avoided, HITL escalations.
 
 ## Quick start
 
-This build uses a **real LLM only — there is no offline mock**, so a **Groq API key
-is required**:
+Atlas runs **real Groq agents** and requires a key (no simulated mode):
 
 ```bash
-cp .env.example .env        # then put your GROQ_API_KEY in .env
-python launch.py            # opens the Signal Deck at http://127.0.0.1:8000
+echo "GROQ_API_KEY=gsk_your_key_here" > .env    # gitignored; get one at console.groq.com/keys
+
+# Single container (API + UI):
+docker compose up --build      # → http://localhost:8000
+
+# …or local dev:
+uv sync && uv run python -m atlas          # backend on :8000
+cd web && npm install && npm run dev       # UI on :5173 (proxies to :8000)
 ```
 
-Type a mission (or tap an example chip) and hit **Deploy**. The communication
-topology is **group** (meetings).
+Then open the UI and try the suggested prompts (e.g. *"Fix the billing Stripe
+payment integration and get the API credentials"* → escalates to approval;
+*"What is the Q3 launch date?"* → redacted; *"What's the weather in Paris?"* →
+gated), or hit **SIMULATE** to watch the org light up.
 
-## Verify
+## Groq (required)
 
-```bash
-python scripts/demo_mission.py    # real run; asserts the expected performative handoffs
-```
+Atlas runs **real Groq agents on every path** — user prompts *and* the cron
+simulation. The LLM generates every agent message, re-ranks routing, and makes
+the (tighten-only) share-vs-redact judgement. **There is no simulated mode**: set
+`GROQ_API_KEY` or the app exits with a clear error. Models are configurable
+(`ATLAS_GROQ_REASONING_MODEL`, `ATLAS_GROQ_PHRASING_MODEL`).
 
-## Docs
+## Tech
 
-- `docs/A2A_CORE_vs_ORG_EXTENSIONS.md` — exactly what is real A2A vs. the org layer
-- `docs/ARCHITECTURE.md` — processes, telemetry backbone, ledgers
-- `docs/COMMUNICATION_PATTERNS.md` — performatives, Contract-Net, group meetings, recursion
-- `docs/WALKTHROUGH.md` — a guided first run
+Python · FastAPI · Pydantic v2 · SSE · React 18 · Vite · TypeScript · Tailwind ·
+react-force-graph · Zustand · Groq (optional).
 
-> The previous trip-planner prototype lives in git history at commit `2383c3f`.
+See **[CLAUDE.md](./CLAUDE.md)** for the architecture, the need-to-know policy
+matrix, and the full design. `uv run pytest` runs the test suite.

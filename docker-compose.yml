@@ -1,0 +1,15 @@
+services:
+  atlas:
+    build: .
+    image: atlas-a2a:latest
+    container_name: atlas
+    ports:
+      - "8000:8000"
+    environment:
+      ATLAS_SEED: "42"
+      ATLAS_CRON_BURST_SECONDS: "15"
+      # REQUIRED: Atlas runs real Groq agents (user prompts AND cron) — there is
+      # NO simulated fallback. Without this the container starts then exits with a
+      # clear error. Put GROQ_API_KEY=gsk_... in a .env next to this file (gitignored).
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+    restart: "no"
