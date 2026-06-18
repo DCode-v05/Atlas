@@ -12,6 +12,7 @@ import asyncio
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from sse_starlette.sse import EventSourceResponse
 
+from atlas.api.projects import build_project_view, list_projects
 from atlas.api.viewmodels import agent_card_view, build_org_view, thread_view
 from atlas.config import get_settings
 from atlas.org.ext_models import ShareOutcome
@@ -47,6 +48,21 @@ def agent_card(agent_id: str, request: Request):
     if agent_id not in rt.registry.agents:
         raise HTTPException(404, "unknown agent")
     return agent_card_view(rt, agent_id)
+
+
+@router.get("/projects")
+def projects(request: Request):
+    """All projects with a compact summary (members / departments / secrets)."""
+    return list_projects(_rt(request))
+
+
+@router.get("/projects/{project_id}")
+def project_detail(project_id: str, request: Request):
+    """A project as a unit: cross-department members, scoped secrets, live coordination."""
+    view = build_project_view(_rt(request), project_id)
+    if view is None:
+        raise HTTPException(404, "unknown project")
+    return view
 
 
 @router.get("/metrics")
