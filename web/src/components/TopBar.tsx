@@ -1,14 +1,7 @@
 import { useState } from "react";
-import { Bell, Cpu, Radio, Send, Sparkles, SquareDashedBottom, Telescope, Triangle } from "lucide-react";
+import { Bell, Cpu, CornerDownLeft, Play, Radio, Search, Square } from "lucide-react";
 import { api } from "../api";
 import { useStore } from "../store";
-
-const SUGGESTED: { label: string; prompt: string }[] = [
-  { label: "billing · secret", prompt: "Fix the billing Stripe payment integration and get the API credentials" },
-  { label: "roadmap · redact", prompt: "What is the Q3 launch date and the product roadmap?" },
-  { label: "incident · group", prompt: "Production incident on the auth service — coordinate the on-call response with the team" },
-  { label: "out-of-scope", prompt: "What's the weather in Paris and a good pasta recipe?" },
-];
 
 export function TopBar() {
   const [text, setText] = useState("");
@@ -26,89 +19,74 @@ export function TopBar() {
   const toggleCron = async () => {
     try { await api.cron(!cron.running); } catch (e) { console.error(e); }
   };
-
-  const connColor = conn === "live" ? "var(--accent)" : conn === "connecting" ? "var(--gold)" : "var(--coral)";
+  const connColor = conn === "live" ? "var(--ok)" : conn === "connecting" ? "var(--gold)" : "var(--coral)";
 
   return (
-    <header className="h-full glass rounded-xl flex items-center gap-3 px-3.5">
+    <header className="panel rounded-lg flex items-center gap-3 px-3 h-[56px]">
       {/* brand */}
       <div className="flex items-center gap-2.5 shrink-0 pr-1">
-        <div className="relative grid place-items-center w-8 h-8 rounded-lg" style={{ background: "radial-gradient(circle at 30% 25%, var(--accent-bright), var(--accent) 60%, #128b73)", boxShadow: "0 0 18px -2px var(--accent-glow), inset 0 1px 1px rgba(255,255,255,0.5)" }}>
-          <Telescope size={16} strokeWidth={2.2} color="#04221c" />
+        <div className="grid place-items-center w-9 h-9 rounded-lg" style={{ background: "var(--accent)", boxShadow: "0 4px 12px -4px var(--accent-glow)" }}>
+          <span className="font-display font-extrabold text-[19px] text-white leading-none">A</span>
         </div>
         <div className="leading-none">
-          <div className="font-display font-extrabold tracking-[0.16em] text-[16px] brand-glow">ATLAS</div>
-          <div className="eyebrow mt-1">Agent Observatory</div>
+          <div className="font-display font-extrabold tracking-tight text-[19px] text-ink">Atlas</div>
+          <div className="eyebrow mt-0.5 text-[8.5px]">Agent Operations Deck</div>
         </div>
       </div>
 
-      <div className="w-px h-8 shrink-0" style={{ background: "linear-gradient(var(--border), transparent)" }} />
+      <div className="w-px h-8 shrink-0" style={{ background: "var(--border)" }} />
 
-      {/* prompt */}
-      <div className="flex items-center gap-2 flex-1 min-w-0">
-        <div className="flex items-center gap-2 inset rounded-lg px-2.5 h-9 flex-1 min-w-0">
-          <Send size={13} className="text-faint shrink-0" />
-          <input
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && submit()}
-            placeholder="Task an agent…  e.g. “fix the billing integration and get the credentials”"
-            className="bg-transparent outline-none text-ink text-[13px] flex-1 min-w-0"
-          />
-          <button
-            onClick={() => submit()}
-            className="flex items-center gap-1 text-[10.5px] font-bold tracking-wide px-2 py-1 rounded-md shrink-0 transition-transform hover:scale-[1.03]"
-            style={{ background: "linear-gradient(180deg, var(--accent-bright), var(--accent))", color: "#04221c", boxShadow: "0 0 14px -4px var(--accent-glow)" }}
-          >
-            <Sparkles size={11} /> SEND
-          </button>
-        </div>
-        <div className="hidden 2xl:flex items-center gap-1.5 shrink-0">
-          {SUGGESTED.map((s) => (
-            <button
-              key={s.label}
-              onClick={() => submit(s.prompt)}
-              title={s.prompt}
-              className="text-[10px] mono px-2 py-1.5 rounded-md border whitespace-nowrap text-muted hover:text-ink hover:border-edge-bright transition-colors"
-              style={{ borderColor: "var(--border)", background: "rgba(255,255,255,0.015)" }}
-            >
-              {s.label}
-            </button>
-          ))}
-        </div>
+      {/* prompt — the hero */}
+      <div className="flex items-center gap-2 inset rounded-lg px-3 h-10 flex-1 min-w-0" style={{ boxShadow: "inset 0 0 0 1px var(--accent-soft)" }}>
+        <Search size={15} className="shrink-0" style={{ color: "var(--accent)" }} />
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+          placeholder="Task an agent…  e.g.  plan the Q3 launch with product, design, and marketing"
+          className="bg-transparent outline-none text-ink text-[13px] flex-1 min-w-0"
+        />
+        <kbd className="hidden md:flex items-center gap-1 mono text-[9px] text-faint px-1.5 py-0.5 rounded" style={{ border: "1px solid var(--border)" }}>
+          <CornerDownLeft size={9} /> ENTER
+        </kbd>
+        <button
+          onClick={() => submit()}
+          className="flex items-center gap-1 text-[11px] font-bold tracking-wide px-3 py-1.5 rounded-md shrink-0 transition-transform hover:scale-[1.03] text-white"
+          style={{ background: "var(--accent)", boxShadow: "0 3px 10px -3px var(--accent-glow)" }}
+        >
+          DISPATCH
+        </button>
       </div>
 
-      {/* cron */}
+      {/* simulate */}
       <button
         onClick={toggleCron}
-        className="shrink-0 flex items-center gap-2 h-9 px-3 rounded-lg border transition-all"
+        className="shrink-0 flex items-center gap-2 h-10 px-3 rounded-md transition-all"
         style={{
-          borderColor: cron.running ? "var(--gold)" : "var(--border)",
-          background: cron.running ? "rgba(243,182,100,0.12)" : "rgba(255,255,255,0.02)",
+          border: `1px solid ${cron.running ? "var(--gold)" : "var(--border)"}`,
+          background: cron.running ? "rgba(194,104,10,0.08)" : "var(--surface)",
           color: cron.running ? "var(--gold)" : "var(--muted)",
-          boxShadow: cron.running ? "0 0 16px -6px var(--gold)" : "none",
         }}
-        title="Toggle the autonomous simulation burst"
+        title="Toggle the autonomous simulation — agents launch a new goal every 30s"
       >
-        {cron.running ? <Triangle size={12} fill="currentColor" className="rotate-90" /> : <Triangle size={12} fill="currentColor" className="rotate-90" />}
-        <span className="text-[10.5px] font-bold tracking-wide">SIMULATE</span>
+        {cron.running ? <Square size={12} fill="currentColor" /> : <Play size={13} fill="currentColor" />}
+        <span className="text-[11px] font-bold tracking-wide">SIMULATE</span>
         {cron.running && <span className="mono text-[10px] tnum w-7 text-right">{cron.remaining.toFixed(0)}s</span>}
       </button>
 
-      {/* llm status */}
       <LlmPill llm={llm} />
 
-      {/* sse */}
-      <div className="shrink-0 flex items-center gap-1.5 h-9 px-2.5 rounded-lg border" style={{ borderColor: "var(--border)", background: "rgba(255,255,255,0.02)" }}>
-        <Radio size={12} color={connColor} className={conn !== "live" ? "animate-flicker" : ""} />
-        <span className="mono text-[9.5px] uppercase tracking-wider" style={{ color: connColor }}>{conn}</span>
+      {/* connection */}
+      <div className="shrink-0 hidden lg:flex items-center gap-1.5 h-10 px-2.5 rounded-md" style={{ border: "1px solid var(--border)", background: "var(--surface)" }} title={`Live feed: ${conn}`}>
+        <Radio size={13} color={connColor} className={conn !== "live" ? "animate-flicker" : ""} />
+        <span className="mono text-[9.5px] uppercase tracking-wide" style={{ color: connColor }}>{conn}</span>
       </div>
 
       {/* hitl bell */}
-      <div className="relative shrink-0 grid place-items-center w-9 h-9 rounded-lg border" style={{ borderColor: hitlCount ? "var(--violet)" : "var(--border)", background: hitlCount ? "rgba(183,156,255,0.1)" : "rgba(255,255,255,0.02)", boxShadow: hitlCount ? "0 0 16px -6px var(--violet)" : "none" }}>
-        <Bell size={15} color={hitlCount ? "var(--violet)" : "var(--muted)"} className={hitlCount ? "animate-flicker" : ""} />
+      <div className="relative shrink-0 grid place-items-center w-10 h-10 rounded-md" style={{ border: `1px solid ${hitlCount ? "var(--violet)" : "var(--border)"}`, background: hitlCount ? "rgba(109,40,217,0.07)" : "var(--surface)" }} title={`${hitlCount} approval(s) pending`}>
+        <Bell size={16} color={hitlCount ? "var(--violet)" : "var(--muted)"} className={hitlCount ? "animate-flicker" : ""} />
         {hitlCount > 0 && (
-          <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 grid place-items-center rounded-full text-[10px] font-bold" style={{ background: "var(--violet)", color: "#1c0f33", boxShadow: "0 0 10px -2px var(--violet)" }}>
+          <span className="absolute -top-1.5 -right-1.5 min-w-[17px] h-[17px] px-1 grid place-items-center rounded-full text-[10px] font-bold mono text-white" style={{ background: "var(--violet)" }}>
             {hitlCount}
           </span>
         )}
@@ -120,20 +98,20 @@ export function TopBar() {
 function LlmPill({ llm }: { llm: any }) {
   const throttled = !!llm?.throttled;
   const offline = llm?.provider === "offline";
-  const color = offline ? "var(--faint)" : throttled ? "var(--gold)" : "var(--accent)";
+  const color = offline ? "var(--faint)" : throttled ? "var(--gold)" : "var(--ok)";
   const prov = (llm?.provider ?? "llm").toUpperCase();
   const label = throttled ? "THROTTLED" : prov;
   const title = llm
-    ? `${prov} — ok ${llm.calls_ok} · throttled ${llm.calls_throttled} · 429 ${llm.calls_429}${llm.reason ? `\n${llm.reason}` : ""}`
+    ? `${prov} — ok ${llm.calls_ok} · paced ${llm.calls_throttled} · 429 ${llm.calls_429}${llm.reason ? `\n${llm.reason}` : ""}`
     : "LLM status";
   return (
     <div
-      className="shrink-0 flex items-center gap-1.5 h-9 px-2.5 rounded-lg border"
-      style={{ borderColor: throttled ? "var(--gold)" : "var(--border)", background: throttled ? "rgba(243,182,100,0.1)" : "rgba(255,255,255,0.02)", boxShadow: throttled ? "0 0 16px -6px var(--gold)" : "none" }}
+      className="shrink-0 hidden sm:flex items-center gap-1.5 h-10 px-2.5 rounded-md"
+      style={{ border: `1px solid ${throttled ? "var(--gold)" : "var(--border)"}`, background: throttled ? "rgba(194,104,10,0.08)" : "var(--surface)" }}
       title={title}
     >
-      <Cpu size={12} color={color} className={throttled ? "animate-flicker" : ""} />
-      <span className="mono text-[9.5px] uppercase tracking-wider" style={{ color }}>{label}</span>
+      <Cpu size={13} color={color} className={throttled ? "animate-flicker" : ""} />
+      <span className="mono text-[9.5px] uppercase tracking-wide" style={{ color }}>{label}</span>
     </div>
   );
 }

@@ -206,9 +206,11 @@ class BedrockProvider(LLMProvider):
         if not self.available:  # in cooldown after throttling
             self.calls_throttled += 1
             return None
-        if not self._bucket(model).take():  # proactive throttle — no API call made
+        if not self._bucket(model).take():  # proactive self-pacing — no API call made
             self.calls_throttled += 1
-            self._set_throttled(True, f"rate budget reached (~{self._rpm}/min) — using templated fallback")
+            # Self-pacing is NOT an error state: don't flip the throttled flag
+            # (reserved for real Bedrock 429s / error cooldown). Excess messages
+            # just fall back to templates for this turn.
             return None
         try:
             async with self._sem:
@@ -288,6 +290,24 @@ class BedrockProvider(LLMProvider):
             if aid in out:
                 return aid
         return None
+
+    # ── org-scope gate (semantic) ──────────────────────────────────────────
+    async def judge_scope(self, prompt: str, *, org_summary: str) -> Optional[bool]:
+        system = (
+            "You are the intake gate for an internal company assistant. Admit a request ONLY if it "
+            "is about THIS company's own people, teams, projects, products, internal data, or "
+            "day-to-day operations. A request that merely names a technology but is generic work "
+            "unrelated to the company (for example 'write a python script to generate wifi passwords', "
+            "or 'weather in Paris') is OUT of scope. Reply with ONLY one word: IN or OUT."
+        )
+        user = f'Company: {org_summary}\n\nRequest: "{prompt}"\n\nIN or OUT?'
+        out = await self._chat(self.reasoning_model, system, user, max_tokens=4, temperature=0.0)
+        if not out:
+            return None
+        m = re.search(r"\b(in|out)\b", out.lower())
+        if not m:
+            return None
+        return m.group(1) == "in"
 
     # ── share judgement (tighten-only) ─────────────────────────────────────
     async def reason_share(

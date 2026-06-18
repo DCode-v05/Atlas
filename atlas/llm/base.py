@@ -28,6 +28,10 @@ class LLMProvider:
     async def rerank(self, prompt: str, candidate_ids: list[str], blurbs: dict[str, str]) -> Optional[str]:  # pragma: no cover
         ...
 
+    async def judge_scope(self, prompt: str, *, org_summary: str) -> Optional[bool]:  # pragma: no cover
+        """Is this prompt about the company? True=in, False=out, None=can't decide."""
+        return None
+
     async def reason_share(
         self,
         *,

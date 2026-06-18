@@ -7,7 +7,7 @@ services:
       - "8000:8000"
     environment:
       ATLAS_SEED: "42"
-      ATLAS_CRON_BURST_SECONDS: "15"
+      ATLAS_CRON_GOAL_SECONDS: "${ATLAS_CRON_GOAL_SECONDS:-30}"
       AWS_REGION: ${AWS_REGION:-us-east-1}
       # REQUIRED: Atlas runs real Mistral via Amazon Bedrock (user prompts AND cron)
       # — NO simulated fallback. Put your Bedrock API key (or AWS creds) in a .env
@@ -16,4 +16,10 @@ services:
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      # Model ids — set these in .env to a foundation-model id OR an inference-profile ARN.
+      ATLAS_BEDROCK_REASONING_MODEL: "${ATLAS_BEDROCK_REASONING_MODEL:-mistral.mistral-large-2402-v1:0}"
+      ATLAS_BEDROCK_PHRASING_MODEL: "${ATLAS_BEDROCK_PHRASING_MODEL:-mistral.mistral-large-2402-v1:0}"
+      # Throttling — lower these in .env if your Bedrock quota is tight (429s).
+      ATLAS_BEDROCK_RPM: "${ATLAS_BEDROCK_RPM:-22}"
+      ATLAS_BEDROCK_BURST: "${ATLAS_BEDROCK_BURST:-5}"
     restart: "no"

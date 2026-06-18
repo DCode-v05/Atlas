@@ -6,16 +6,19 @@ import { LEVEL_LABEL, deptColor } from "../theme";
 import { useStore } from "../store";
 import { IntentChip, ModeTag, OutcomeBadge, SensitivityShield, StatusDot } from "./ui";
 
-function Drawer({ title, onClose, children, accent }: { title: string; onClose: () => void; children: React.ReactNode; accent?: string }) {
+function Drawer({ title, idx, onClose, children, accent }: { title: string; idx?: string; onClose: () => void; children: React.ReactNode; accent?: string }) {
   return (
-    <div className="fixed inset-0 z-30 flex justify-end" style={{ background: "rgba(3,5,8,0.6)", backdropFilter: "blur(2px)" }} onClick={onClose}>
+    <div className="fixed inset-0 z-30 flex justify-end" style={{ background: "rgba(24,28,34,0.38)", backdropFilter: "blur(2px)" }} onClick={onClose}>
       <div
-        className="h-full w-[452px] max-w-[94vw] glass flex flex-col animate-slide-in"
+        className="h-full w-[452px] max-w-[94vw] panel flex flex-col animate-slide-in"
         style={{ borderRadius: 0, borderLeft: `1px solid ${accent ?? "var(--border-bright)"}`, boxShadow: "-30px 0 60px -30px rgba(0,0,0,0.9)" }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-4 h-12 border-b shrink-0" style={{ borderColor: "var(--border)" }}>
-          <span className="eyebrow" style={{ color: accent ?? "var(--accent)" }}>{title}</span>
+          <span className="flex items-center gap-1.5">
+            {idx && <span className="idx" style={accent ? { color: accent } : undefined}>{idx}</span>}
+            <span className="eyebrow" style={{ color: accent ?? "var(--accent)" }}>{title}</span>
+          </span>
           <button onClick={onClose} className="text-faint hover:text-ink"><X size={16} /></button>
         </div>
         <div className="flex-1 overflow-y-auto min-h-0">{children}</div>
@@ -35,13 +38,13 @@ export function ConversationDrawer() {
   const nameOf = (id: string) => (id === "operator" ? "Operator (you)" : agents[id]?.name ?? id);
 
   return (
-    <Drawer title="Conversation" onClose={close}>
+    <Drawer title="Conversation" idx="◆" onClose={close}>
       <div className="p-3.5 border-b" style={{ borderColor: "var(--border)" }}>
         <div className="text-[12px] text-ink mb-1.5 leading-snug">{ctx?.prompt ? `“${ctx.prompt}”` : "Autonomous task"}</div>
         <div className="flex items-center gap-2 mono text-[10px] text-faint">
           <span>{cid}</span>
           {ctx?.state && (
-            <span className="px-1.5 py-0.5 rounded-md" style={{ background: "rgba(255,255,255,0.05)", color: ctx.state === "completed" ? "var(--accent)" : ctx.state === "input-required" ? "var(--violet)" : "var(--gold)" }}>{ctx.state}</span>
+            <span className="px-1.5 py-0.5 rounded-sm uppercase tracking-wide" style={{ background: "var(--inset)", color: ctx.state === "completed" ? "var(--ok)" : ctx.state === "input-required" ? "var(--violet)" : "var(--gold)" }}>{ctx.state}</span>
           )}
         </div>
       </div>
@@ -50,10 +53,10 @@ export function ConversationDrawer() {
         {messages.map((m) => {
           const group = m.mode === "group";
           return (
-            <div key={m.id} className="rounded-lg p-2.5" style={{ background: group ? "rgba(183,156,255,0.06)" : "rgba(255,255,255,0.025)", border: `1px solid ${group ? "rgba(183,156,255,0.24)" : "var(--border)"}` }}>
+            <div key={m.id} className="rounded-sm p-2.5" style={{ background: group ? "rgba(109,40,217,0.05)" : "var(--surface-2)", border: `1px solid ${group ? "rgba(109,40,217,0.24)" : "var(--border)"}` }}>
               <div className="flex items-center justify-between gap-2 mb-1">
                 <div className="flex items-center gap-1.5 min-w-0">
-                  <span className="w-2 h-2 rounded-[3px] shrink-0" style={{ background: deptColor(agents[m.sender]?.department ?? ""), boxShadow: `0 0 6px ${deptColor(agents[m.sender]?.department ?? "")}55` }} />
+                  <span className="w-2 h-2 shrink-0" style={{ background: deptColor(agents[m.sender]?.department ?? ""), boxShadow: `0 0 6px ${deptColor(agents[m.sender]?.department ?? "")}55` }} />
                   <span className="text-[11px] font-semibold text-ink truncate">{nameOf(m.sender)}</span>
                   <span className="text-faint text-[10px]">→</span>
                   <span className="text-[10px] text-muted truncate">{group ? `group · ${m.recipients.length}` : m.recipients.map(nameOf).join(", ")}</span>
@@ -114,7 +117,7 @@ export function AgentCardDrawer() {
   const nameOf = (x?: string | null) => (x ? agents[x]?.name ?? x : "—");
 
   return (
-    <Drawer title="Agent Card" onClose={close} accent={color}>
+    <Drawer title="Agent Card" idx="◆" onClose={close} accent={color}>
       <div className="h-1" style={{ background: `linear-gradient(90deg, ${color}, transparent)`, boxShadow: `0 0 12px ${color}` }} />
       <div className="p-4">
         <div className="flex items-start justify-between">
@@ -142,11 +145,11 @@ export function AgentCardDrawer() {
         <Section label={`Skills (${card?.card?.skills?.length ?? 0})`}>
           <div className="flex flex-col gap-1.5">
             {card?.card?.skills?.map((s: any) => (
-              <div key={s.id} className="inset rounded-md px-2 py-1.5">
+              <div key={s.id} className="inset rounded-sm px-2 py-1.5">
                 <div className="text-[11px] text-ink">{s.name}</div>
                 <div className="flex flex-wrap gap-1 mt-1">
                   {s.tags?.map((t: string) => (
-                    <span key={t} className="mono text-[8.5px] px-1 py-0.5 rounded" style={{ color: "var(--muted)", background: "rgba(255,255,255,0.05)" }}>{t}</span>
+                    <span key={t} className="mono text-[8.5px] px-1 py-0.5 rounded-sm" style={{ color: "var(--muted)", background: "var(--inset)" }}>{t}</span>
                   ))}
                 </div>
               </div>
@@ -179,7 +182,7 @@ export function AgentCardDrawer() {
 
 function Tag({ children, color }: { children: React.ReactNode; color?: string }) {
   return (
-    <span className="text-[10px] px-1.5 py-0.5 rounded-md" style={{ color: color ?? "var(--muted)", background: color ? `${color}16` : "rgba(255,255,255,0.04)", border: `1px solid ${color ? `${color}33` : "var(--border)"}` }}>
+    <span className="text-[10px] px-1.5 py-0.5 rounded-sm" style={{ color: color ?? "var(--muted)", background: color ? `${color}14` : "var(--inset)", border: `1px solid ${color ? `${color}33` : "var(--border)"}` }}>
       {children}
     </span>
   );

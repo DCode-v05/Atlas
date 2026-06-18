@@ -1,11 +1,12 @@
 """The cron simulation engine.
 
-When toggled on, runs a ~15s burst where agents autonomously initiate tasks and
-communicate — a stand-in for manual user prompts. Crucially it drives the
+While toggled on, agents autonomously launch a new **goal every ``cron_goal_seconds``**
+(default 30s) — continuously, not a one-off burst — and work it through the
 *identical* orchestrator pipeline, so policy, redaction, and HITL are enforced
 exactly as on the interactive path (escalations land in the same operator queue).
-It uses the same LLM as the interactive path — real Mistral (Amazon Bedrock) when
-credentials are set — while the burst sequence itself is seeded.
+Goals are **balanced across all departments** (round-robin), so activity isn't
+concentrated in Engineering. The sequence is seeded for reproducibility; message
+phrasing uses the same real Mistral (Amazon Bedrock) as the interactive path.
 """
 
 from __future__ import annotations
@@ -13,18 +14,68 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from random import Random
-from typing import Callable, Optional
+from typing import Optional
 
 from atlas.bus.registry import AgentRegistry
 from atlas.config import Settings
 from atlas.conversation.orchestrator import Orchestrator
 from atlas.events import CronStatePayload, CronTickPayload, EventBroker, EventType
-from atlas.org.ext_models import Department, Level
+from atlas.org.ext_models import Department
 from atlas.org.generator import OrgSnapshot
 
-# (label, prompt) — the prompt's wording decides individual vs group via the
-# orchestrator's group-word heuristic.
-Archetype = tuple[str, str, Callable[["CronSimulator"], Optional[str]]]
+# One or more (label, prompt) goals per department. Wording with team/sync/align/
+# coordinate/incident triggers a group session; sensitive items drive redaction /
+# HITL. Every department appears so the simulation lights up the whole org.
+DEPT_GOALS: dict[Department, list[tuple[str, str]]] = {
+    Department.EXEC: [
+        ("strategy", "brief the leadership team on the company strategy and OKRs for next quarter"),
+        ("m&a", "are there acquisition or M&A talks affecting strategy I should brief the board on?"),
+    ],
+    Department.ENGINEERING: [
+        ("code-review", "code review handoff — I need the engineering API style guide and backend context"),
+        ("architecture", "refactoring the event pipeline — share the Atlas Core architecture decision record"),
+    ],
+    Department.PRODUCT: [
+        ("roadmap-sync", "roadmap sync — align the team on the launch date and priorities"),
+        ("features", "what unreleased features are planned for the mobile app this quarter?"),
+    ],
+    Department.QA: [
+        ("release-signoff", "release verification — coordinate testing sign-off with the team"),
+        ("bug-triage", "triage the open bugs for the mobile release and assign severity with the team"),
+    ],
+    Department.DEVOPS: [
+        ("incident", "production incident on the auth service — coordinate the on-call response with the team"),
+        ("capacity", "plan Kubernetes capacity ahead of the launch with the team"),
+    ],
+    Department.SALES: [
+        ("deal-handoff", "customer handoff — I need the Acme enterprise contract terms for this account"),
+        ("forecast", "what's the Q3 revenue forecast for the board deck?"),
+    ],
+    Department.DESIGN: [
+        ("design-sync", "design sync — align with the team on the mobile UX and prototype"),
+        ("usability", "review the checkout flow for usability issues with the team"),
+    ],
+    Department.DATA: [
+        ("churn-model", "I need access to the production user PII dataset to train a churn model"),
+        ("experiment", "set up an A/B experiment for the onboarding change and define metrics with the team"),
+    ],
+    Department.MARKETING: [
+        ("campaign", "plan the launch campaign and coordinate the messaging with the team"),
+        ("release-notes", "draft the release notes and update the knowledge base for the new feature"),
+    ],
+    Department.SUPPORT: [
+        ("escalation", "a customer escalation came in about a billing charge — help me resolve the ticket"),
+        ("kb-update", "update the support knowledge base for the new onboarding flow with the team"),
+    ],
+    Department.SECURITY: [
+        ("sec-incident", "security incident — I need the embargoed vulnerability details to respond"),
+        ("sec-audit", "run an application-security review of the auth and payments services"),
+    ],
+    Department.HR: [
+        ("comp-band", "what is the L3 compensation band for an offer I'm preparing?"),
+        ("hiring", "we need to hire two backend engineers — kick off recruiting with the team"),
+    ],
+}
 
 
 class CronSimulator:
@@ -41,72 +92,27 @@ class CronSimulator:
         self.registry = registry
         self.snapshot = snapshot
         self.broker = broker
-        self.burst_seconds = settings.cron_burst_seconds
+        self.goal_seconds = settings.cron_goal_seconds
         self.tick_seconds = settings.cron_tick_seconds
-        self.loop_forever = settings.cron_loop
         self.rng = Random(settings.seed * 7919 + 13)
         self.running = False
         self._task: Optional[asyncio.Task] = None
-        self._pools = self._build_pools()
-        self._weighted = self._build_weighted_archetypes()
-
-    # ── pools ─────────────────────────────────────────────────────────────
-    def _ids(self, *, dept=None, level=None, project=None) -> list[str]:
-        out = []
+        # agents per department, for initiator selection
+        self._by_dept: dict[Department, list[str]] = {}
         for ag in self.snapshot.agents.values():
-            p = ag.profile
-            if dept is not None and p.department != dept:
-                continue
-            if level is not None and p.level != level:
-                continue
-            if project is not None and project not in p.projects:
-                continue
-            out.append(ag.id)
-        return out
+            self._by_dept.setdefault(ag.profile.department, []).append(ag.id)
+        # round-robin order over the departments we have goals for
+        self._order = [d for d in DEPT_GOALS if self._by_dept.get(d)]
+        self.rng.shuffle(self._order)
 
-    def _build_pools(self) -> dict[str, list[str]]:
-        return {
-            "eng_ic": self._ids(dept=Department.ENGINEERING, level=Level.IC),
-            "billing_eng": self._ids(dept=Department.ENGINEERING, level=Level.IC, project="billing"),
-            "mobile_eng": self._ids(dept=Department.ENGINEERING, level=Level.IC, project="mobile"),
-            "devops_ic": self._ids(dept=Department.DEVOPS, level=Level.IC),
-            "product": self._ids(dept=Department.PRODUCT),
-            "sales_ic": self._ids(dept=Department.SALES, level=Level.IC),
-            "hr_ic": self._ids(dept=Department.HR, level=Level.IC),
-            "qa_ic": self._ids(dept=Department.QA, level=Level.IC),
-            "design_ic": self._ids(dept=Department.DESIGN, level=Level.IC),
-            "security_ic": self._ids(dept=Department.SECURITY, level=Level.IC),
-        }
-
-    def _pick(self, pool: str) -> Optional[str]:
-        ids = self._pools.get(pool) or []
+    # ── initiator ───────────────────────────────────────────────────────────
+    def _pick_in(self, dept: Department) -> Optional[str]:
+        ids = self._by_dept.get(dept) or []
         return self.rng.choice(ids) if ids else None
-
-    # ── archetypes ────────────────────────────────────────────────────────
-    def _build_weighted_archetypes(self) -> list[Archetype]:
-        a: list[Archetype] = [
-            ("standup", "team standup sync — share status and blockers with the team", lambda s: s._pick("eng_ic")),
-            ("incident", "production incident — coordinate the on-call response with the team", lambda s: s._pick("devops_ic")),
-            ("code-review", "code review handoff — I need the engineering api style guide and backend context", lambda s: s._pick("eng_ic")),
-            ("roadmap-sync", "roadmap sync — align the team on the launch date and priorities", lambda s: s._pick("product")),
-            ("sales-handoff", "customer handoff — I need the acme enterprise contract terms for this account", lambda s: s._pick("sales_ic")),
-            ("design-sync", "design sync — align with the team on the mobile UX and prototype", lambda s: s._pick("design_ic")),
-            ("qa-release", "release verification — coordinate testing sign-off with the team", lambda s: s._pick("qa_ic")),
-            # rarer, sensitive ones that trigger redaction / HITL:
-            ("billing-secret", "I need the billing stripe payment credentials to wire the integration", lambda s: s._pick("billing_eng")),
-            ("comp-question", "what is the L3 compensation band for an offer I'm preparing", lambda s: s._pick("hr_ic")),
-            ("security-incident", "security incident — I need the embargoed vulnerability details to respond", lambda s: s._pick("security_ic")),
-        ]
-        # weight the common (first 7) more heavily than the sensitive (last 3)
-        weights = [3, 3, 3, 3, 3, 3, 3, 1, 1, 1]
-        weighted: list[Archetype] = []
-        for arche, w in zip(a, weights):
-            weighted.extend([arche] * w)
-        return weighted
 
     # ── control ───────────────────────────────────────────────────────────
     def status(self) -> dict:
-        return {"running": self.running, "burst_seconds": self.burst_seconds}
+        return {"running": self.running, "burst_seconds": self.goal_seconds}
 
     async def toggle(self, on: bool) -> dict:
         if on and not self.running:
@@ -123,39 +129,41 @@ class CronSimulator:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
             self._task = None
-        self.broker.emit(EventType.CRON_STATE, CronStatePayload(running=False, burst_seconds=self.burst_seconds))
+        self.broker.emit(EventType.CRON_STATE, CronStatePayload(running=False, burst_seconds=self.goal_seconds))
 
     async def _run(self) -> None:
+        """Continuous loop: fire a balanced goal, count down ``goal_seconds``, repeat."""
         self.running = True
-        self.broker.emit(EventType.CRON_STATE, CronStatePayload(running=True, burst_seconds=self.burst_seconds))
+        self.broker.emit(EventType.CRON_STATE, CronStatePayload(running=True, burst_seconds=self.goal_seconds))
+        i = 0
         try:
-            while True:
-                await self._one_burst()
-                if not self.loop_forever:
-                    break
+            while self.running:
+                dept = self._order[i % len(self._order)]
+                i += 1
+                label, prompt = self.rng.choice(DEPT_GOALS[dept])
+                initiator = self._pick_in(dept)
+                if initiator is not None:
+                    self.orch.run_cron_task(initiator, prompt, label=f"{dept.value}:{label}")
+                await self._countdown(label)
         except asyncio.CancelledError:  # pragma: no cover
             raise
         finally:
             self.running = False
-            self.broker.emit(EventType.CRON_STATE, CronStatePayload(running=False, burst_seconds=self.burst_seconds))
+            self.broker.emit(EventType.CRON_STATE, CronStatePayload(running=False, burst_seconds=self.goal_seconds))
 
-    async def _one_burst(self) -> None:
+    async def _countdown(self, label: str) -> None:
         loop = asyncio.get_running_loop()
         start = loop.time()
         elapsed = 0.0
-        while self.running and elapsed < self.burst_seconds:
-            label, prompt, picker = self.rng.choice(self._weighted)
-            initiator = picker(self)
+        while self.running and elapsed < self.goal_seconds:
             self.broker.emit(
                 EventType.CRON_TICK,
                 CronTickPayload(
                     elapsed=round(elapsed, 1),
-                    remaining=round(max(0.0, self.burst_seconds - elapsed), 1),
+                    remaining=round(max(0.0, self.goal_seconds - elapsed), 1),
                     running=True,
                     planned=label,
                 ),
             )
-            if initiator is not None:
-                self.orch.run_cron_task(initiator, prompt)
             await asyncio.sleep(self.tick_seconds)
             elapsed = loop.time() - start

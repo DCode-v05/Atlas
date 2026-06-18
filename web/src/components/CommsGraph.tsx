@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ForceGraph2D from "react-force-graph-2d";
-import { CHROME, OUTCOME_META, STATUS_COLORS, deptColor, intentColor, nodeRadius } from "../theme";
+import { CHROME, DEPARTMENT_LABEL, OUTCOME_META, STATUS_COLORS, deptColor, intentColor, nodeRadius } from "../theme";
 import { useStore } from "../store";
 import type { OrgView } from "../types";
 
 function computeLayout(org: OrgView): Map<string, { x: number; y: number }> {
   const pos = new Map<string, { x: number; y: number }>();
   const entries = Object.entries(org.departments).filter(([d]) => d !== "exec");
-  const R = 480; // ring radius — wider so clusters don't crowd
+  const R = 480;
   const centers: Record<string, [number, number]> = { exec: [0, 0] };
   entries.forEach(([d], i) => {
     const a = (i / entries.length) * 2 * Math.PI - Math.PI / 2;
@@ -29,7 +29,6 @@ function computeLayout(org: OrgView): Map<string, { x: number; y: number }> {
 }
 
 function linkColor(l: any): string {
-  if (l.kind === "report") return "rgba(150,180,210,0.13)";
   if (l.outcome) return OUTCOME_META[l.outcome]?.color ?? CHROME.muted;
   return intentColor(l.intent) ?? CHROME.accent;
 }
@@ -46,7 +45,6 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
 
 export function CommsGraph() {
   const org = useStore((s) => s.org);
-  const view = useStore((s) => s.view);
   const liveLinks = useStore((s) => s.links);
   const statusMap = useStore((s) => s.status);
   const deptFilter = useStore((s) => s.deptFilter);
@@ -82,30 +80,41 @@ export function CommsGraph() {
     return arr;
   }, [org]);
 
-  const links = useMemo(() => {
-    if (!org) return [];
-    if (view === "hierarchy") return org.reporting_edges.map((e) => ({ source: e.source, target: e.target, kind: "report" }));
-    return liveLinks.map((l) => ({ source: l.source, target: l.target, intent: l.intent, outcome: l.outcome, mode: l.mode }));
-  }, [org, view, liveLinks]);
+  // centroid + top of each department cluster, for the team-name labels on the map
+  const deptCentroids = useMemo(() => {
+    const acc: Record<string, { sx: number; n: number; minY: number }> = {};
+    for (const nd of nodes) {
+      if (nd.id === "operator") continue;
+      const a = acc[nd.dept] ?? (acc[nd.dept] = { sx: 0, n: 0, minY: Infinity });
+      a.sx += nd.fx;
+      a.n += 1;
+      a.minY = Math.min(a.minY, nd.fy);
+    }
+    return Object.entries(acc).map(([dept, a]) => ({ dept, cx: a.sx / a.n, minY: a.minY, count: a.n }));
+  }, [nodes]);
+
+  const links = useMemo(
+    () => liveLinks.map((l) => ({ source: l.source, target: l.target, intent: l.intent, outcome: l.outcome, mode: l.mode })),
+    [liveLinks],
+  );
 
   const data = useMemo(() => ({ nodes, links }), [nodes, links]);
 
   useEffect(() => {
     if (nodes.length && fgRef.current) {
-      const t = setTimeout(() => fgRef.current?.zoomToFit(600, 90), 280);
+      const t = setTimeout(() => fgRef.current?.zoomToFit(600, 80), 280);
       return () => clearTimeout(t);
     }
-  }, [nodes.length]);
+  }, [nodes.length, size.w, size.h]);
 
   if (!org) return <div ref={wrapRef} className="h-full w-full" />;
 
   return (
     <div ref={wrapRef} className="h-full w-full relative overflow-hidden">
-      <div className="absolute inset-0 pointer-events-none" style={{ background: "radial-gradient(60% 55% at 50% 42%, rgba(110,231,199,0.05), transparent 70%)" }} />
-      <div className="absolute top-3.5 left-3.5 z-10 pointer-events-none flex items-center gap-2">
-        <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--accent)", boxShadow: "0 0 8px var(--accent)" }} />
-        <span className="eyebrow" style={{ color: "var(--text-2)" }}>{view === "hierarchy" ? "Reporting Hierarchy" : "Live Communication Map"}</span>
-        <span className="mono text-[9.5px] text-faint">· {org.node_count} agents</span>
+      <div className="absolute top-3 left-3.5 z-10 pointer-events-none flex items-center gap-2">
+        <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--accent)" }} />
+        <span className="eyebrow">Live communication map</span>
+        <span className="mono text-[9.5px] text-faint">· {org.node_count} agents · {liveLinks.length} active</span>
       </div>
 
       <ForceGraph2D
@@ -121,13 +130,11 @@ export function CommsGraph() {
         onNodeHover={(n: any) => setHover(n?.id ?? null)}
         onNodeClick={(n: any) => n?.id !== "operator" && selectAgent(n.id)}
         linkColor={linkColor}
-        linkWidth={(l: any) => (l.kind === "report" ? 0.5 : l.mode === "group" ? 2.4 : l.outcome === "hitl" ? 2.2 : 1.3)}
-        linkDirectionalParticles={(l: any) => (l.kind === "report" || l.outcome === "denied" ? 0 : 2)}
+        linkWidth={(l: any) => (l.mode === "group" ? 2.4 : l.outcome === "hitl" ? 2.2 : 1.4)}
+        linkDirectionalParticles={(l: any) => (l.outcome === "denied" ? 0 : 2)}
         linkDirectionalParticleWidth={(l: any) => (l.mode === "group" ? 3 : 2.2)}
         linkDirectionalParticleColor={linkColor}
         linkDirectionalParticleSpeed={0.011}
-        linkDirectionalArrowLength={(l: any) => (l.kind === "report" ? 2.4 : 0)}
-        linkDirectionalArrowRelPos={1}
         nodeCanvasObject={(node: any, ctx: CanvasRenderingContext2D) => {
           const { x, y } = node;
           if (!Number.isFinite(x) || !Number.isFinite(y)) return;
@@ -135,31 +142,24 @@ export function CommsGraph() {
           const r = isOp ? 8 : nodeRadius(node.level);
           const status = isOp ? "idle" : statusMap[node.id] ?? "idle";
           const base = isOp ? CHROME.accent : deptColor(node.dept);
-          const dim = deptFilter && !isOp && node.dept !== deptFilter ? 0.13 : 1;
+          const dim = deptFilter && !isOp && node.dept !== deptFilter ? 0.16 : 1;
           ctx.globalAlpha = dim;
 
           if (status !== "idle") {
             const sc = STATUS_COLORS[status];
-            const g = ctx.createRadialGradient(x, y, 0, x, y, r + 9);
-            g.addColorStop(0, sc + "66");
-            g.addColorStop(1, "rgba(0,0,0,0)");
-            ctx.fillStyle = g;
             ctx.beginPath();
-            ctx.arc(x, y, r + 9, 0, 2 * Math.PI);
-            ctx.fill();
-            ctx.beginPath();
-            ctx.arc(x, y, r + 3, 0, 2 * Math.PI);
+            ctx.arc(x, y, r + 3.5, 0, 2 * Math.PI);
             ctx.strokeStyle = sc;
             ctx.globalAlpha = dim * 0.9;
-            ctx.lineWidth = 1.3;
+            ctx.lineWidth = 1.6;
             ctx.stroke();
             ctx.globalAlpha = dim;
           }
           if (!isOp && groupMembers.has(node.id)) {
             ctx.beginPath();
             ctx.arc(x, y, r + 6, 0, 2 * Math.PI);
-            ctx.strokeStyle = "rgba(183,156,255,0.55)";
-            ctx.lineWidth = 1;
+            ctx.strokeStyle = "rgba(109,40,217,0.6)";
+            ctx.lineWidth = 1.2;
             ctx.stroke();
           }
           if (isOp) {
@@ -177,17 +177,10 @@ export function CommsGraph() {
           grad.addColorStop(0, lighten(base));
           grad.addColorStop(1, base);
           ctx.fillStyle = grad;
-          ctx.shadowColor = base;
-          ctx.shadowBlur = isOp ? 14 : status !== "idle" ? 8 : 0;
           ctx.fill();
-          ctx.shadowBlur = 0;
-          if (node.level >= 4) {
-            ctx.beginPath();
-            ctx.arc(x, y, r + 1.7, 0, 2 * Math.PI);
-            ctx.strokeStyle = "rgba(255,255,255,0.5)";
-            ctx.lineWidth = 0.8;
-            ctx.stroke();
-          }
+          ctx.strokeStyle = "rgba(255,255,255,0.85)";
+          ctx.lineWidth = node.level >= 4 || isOp ? 1.4 : 0.8;
+          ctx.stroke();
           ctx.globalAlpha = 1;
         }}
         nodePointerAreaPaint={(node: any, color: string, ctx: CanvasRenderingContext2D) => {
@@ -199,39 +192,47 @@ export function CommsGraph() {
           ctx.fill();
         }}
         onRenderFramePost={(ctx: CanvasRenderingContext2D, scale: number) => {
-          // Labels drawn in a single decluttered pass: only operator / CEO /
-          // dept-heads / the hovered node, never overlapping, on dark pills.
-          const placed: { x0: number; y0: number; x1: number; y1: number }[] = [];
-          const cands: { n: any; pr: number }[] = [];
-          for (const n of nodes) {
-            if (!Number.isFinite(n.x) || !Number.isFinite(n.y)) continue;
-            const isHover = n.id === hover;
-            const isOp = n.id === "operator";
-            if (!(isHover || isOp || n.level >= 4)) continue;
-            cands.push({ n, pr: isHover ? 0 : isOp ? 1 : 7 - n.level });
-          }
-          cands.sort((a, b) => a.pr - b.pr);
-          const fpx = Math.max(8.5, 11 / scale);
-          ctx.font = `600 ${fpx}px "Spline Sans Mono", monospace`;
+          // 1) team / department name on each cluster (a colored pill above it)
+          const dfpx = Math.max(10, 13 / scale);
+          ctx.font = `700 ${dfpx}px "JetBrains Mono", monospace`;
           ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          for (const ce of deptCentroids) {
+            if (!Number.isFinite(ce.cx) || !Number.isFinite(ce.minY)) continue;
+            const label = `${(DEPARTMENT_LABEL[ce.dept] ?? ce.dept).toUpperCase()} · ${ce.count}`;
+            const w = ctx.measureText(label).width;
+            const pad = 5;
+            const boxH = dfpx + 7;
+            const py = ce.minY - 16;
+            const c = deptColor(ce.dept);
+            ctx.globalAlpha = deptFilter && deptFilter !== ce.dept ? 0.3 : 1;
+            ctx.fillStyle = c;
+            roundRect(ctx, ce.cx - w / 2 - pad, py - boxH / 2, w + pad * 2, boxH, 3);
+            ctx.fill();
+            ctx.fillStyle = "#fff";
+            ctx.fillText(label, ce.cx, py);
+            ctx.globalAlpha = 1;
+          }
+
+          // 2) operator + hovered agent name (white pill, dark text)
+          const fpx = Math.max(8.5, 11 / scale);
+          ctx.font = `600 ${fpx}px "JetBrains Mono", monospace`;
           ctx.textBaseline = "top";
-          for (const { n } of cands) {
+          for (const n of nodes) {
+            if (n.id !== "operator" && n.id !== hover) continue;
+            if (!Number.isFinite(n.x) || !Number.isFinite(n.y)) continue;
             const r = n.id === "operator" ? 8 : nodeRadius(n.level);
             const w = ctx.measureText(n.name).width;
             const cx = n.x;
             const ty = n.y + r + 3.5;
             const pad = 3.5;
-            const box = { x0: cx - w / 2 - pad, y0: ty - 1.5, x1: cx + w / 2 + pad, y1: ty + fpx + 1.5 };
-            const clash = placed.some((p) => box.x0 < p.x1 && box.x1 > p.x0 && box.y0 < p.y1 && box.y1 > p.y0);
-            if (clash && n.id !== hover) continue;
-            placed.push(box);
-            ctx.fillStyle = "rgba(7,9,14,0.8)";
-            roundRect(ctx, box.x0, box.y0, box.x1 - box.x0, box.y1 - box.y0, 3);
+            ctx.fillStyle = "rgba(255,255,255,0.95)";
+            roundRect(ctx, cx - w / 2 - pad, ty - 1.5, w + pad * 2, fpx + 3, 2);
             ctx.fill();
-            ctx.strokeStyle = "rgba(150,180,210,0.14)";
-            ctx.lineWidth = 0.5;
+            ctx.strokeStyle = "rgba(30,41,53,0.22)";
+            ctx.lineWidth = 0.6;
             ctx.stroke();
-            ctx.fillStyle = n.id === hover ? "#e8eef4" : "rgba(232,238,244,0.82)";
+            ctx.fillStyle = "#181c22";
             ctx.fillText(n.name, cx, ty);
           }
         }}
@@ -244,5 +245,5 @@ function lighten(hex: string): string {
   const h = hex.replace("#", "");
   if (h.length !== 6) return hex;
   const n = parseInt(h, 16);
-  return `rgb(${Math.min(255, ((n >> 16) & 255) + 60)},${Math.min(255, ((n >> 8) & 255) + 60)},${Math.min(255, (n & 255) + 60)})`;
+  return `rgb(${Math.min(255, ((n >> 16) & 255) + 55)},${Math.min(255, ((n >> 8) & 255) + 55)},${Math.min(255, (n & 255) + 55)})`;
 }

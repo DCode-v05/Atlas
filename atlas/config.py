@@ -25,11 +25,16 @@ class Settings(BaseSettings):
     # Determinism: a single seed drives org generation and the cron sequence.
     seed: int = 42
 
-    # Cron simulation (kept gentle so the LLM isn't hammered).
+    # Cron simulation: while toggled on, agents autonomously launch one new goal
+    # every ``cron_goal_seconds`` (continuous, not a one-off burst), balanced
+    # across departments. Kept gentle so the rate-limited LLM isn't hammered.
+    cron_goal_seconds: float = 30.0
+    cron_tick_seconds: float = 1.0  # countdown-tick cadence for the UI
+    cron_max_inflight: int = 2      # load-shed: max concurrent goal scenarios
+    # legacy (the simulator now loops unconditionally while toggled on) — kept so
+    # old .env files / overrides don't error:
     cron_burst_seconds: float = 15.0
-    cron_tick_seconds: float = 2.0
-    cron_loop: bool = False
-    cron_max_inflight: int = 1
+    cron_loop: bool = True
 
     # Human-in-the-loop: 0 disables the auto-decision timeout (operator decides).
     hitl_timeout_seconds: float = 0.0

@@ -27,6 +27,9 @@ class OfflineLLM:
     async def reason_share(self, **kwargs):
         return None
 
+    async def judge_scope(self, prompt, *, org_summary):
+        return None
+
 
 @pytest.fixture
 def offline_llm():

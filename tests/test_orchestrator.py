@@ -59,6 +59,47 @@ async def test_out_of_scope_prompt_is_gated(rt):
     assert any(e.event == "gate.rejected" for e in rt.broker.recent(100))
 
 
+class _ScopeLLM:
+    """An available LLM double whose semantic scope verdict is fixed."""
+    name = "scope-fake"
+
+    def __init__(self, verdict):
+        self._verdict = verdict
+
+    @property
+    def available(self):
+        return True
+
+    async def phrase(self, kind, ctx):
+        return None
+
+    async def rerank(self, prompt, candidate_ids, blurbs):
+        return None
+
+    async def reason_share(self, **kwargs):
+        return None
+
+    async def judge_scope(self, prompt, *, org_summary):
+        return self._verdict
+
+
+async def test_llm_gate_rejects_in_lexicon_but_out_of_scope():
+    rt = build_runtime(get_settings(), step_delay=0.0, llm=_ScopeLLM(False))
+    prompt = "give me the python script for generating wifi"
+    # 'python' is an engineering skill tag, so the cheap lexical gate admits it…
+    assert rt.router.org_scope_gate(prompt)[0] is True
+    # …but the authoritative LLM semantic gate judges it OUT → rejected.
+    res = await rt.orchestrator.run_user_prompt(prompt)
+    assert res["rejected"] is True
+    assert any(e.event == "gate.rejected" for e in rt.broker.recent(100))
+
+
+async def test_llm_gate_admits_when_in_scope():
+    rt = build_runtime(get_settings(), step_delay=0.0, llm=_ScopeLLM(True))
+    res = await rt.orchestrator.run_user_prompt("give me the python script for generating wifi")
+    assert res["rejected"] is False
+
+
 async def test_user_prompt_routes_and_completes(rt):
     res = await rt.orchestrator.run_user_prompt("help me fix the deployment pipeline incident on prod")
     assert res["rejected"] is False

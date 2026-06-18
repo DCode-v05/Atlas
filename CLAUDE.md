@@ -87,8 +87,13 @@ outcome is ESCALATE — no override ever leaks it. An optional Groq pass may onl
 
 ## How a prompt flows (`atlas/conversation/orchestrator.py`)
 
+The **org-scope gate** is LLM-semantic: a cheap lexical pre-check, then Mistral
+judges whether the prompt is about the company (people/projects/products/ops) and
+its verdict is authoritative (falls back to lexical only if the LLM is unavailable).
+The cron path skips the gate (goals are in-scope by construction).
+
 ```
-prompt → org-scope gate → Level-1 route (→ best agent) → open Task →
+prompt → org-scope gate (LLM-judged) → Level-1 route (→ best agent) → open Task →
   agent identifies context needs → Level-2 discovery (→ owners) →
     for each owner: ask (with intent) → policy decides →
       SHARE / REDACT / DENY / ESCALATE→HITL (task input-required, operator approves) →
@@ -96,8 +101,10 @@ prompt → org-scope gate → Level-1 route (→ best agent) → open Task →
   finalize Task → metrics emitted
 ```
 
-The **cron simulator** (`atlas/cron`) toggles a ~15s burst that drives this exact
-pipeline from autonomous, seeded agent-initiated tasks. **Metrics**
+The **cron simulator** (`atlas/cron`) — when toggled on — runs *continuously*,
+launching one autonomous **goal every ~30s** (`ATLAS_CRON_GOAL_SECONDS`), **balanced
+across all departments** (round-robin, so it isn't Engineering-heavy), each driving
+this exact pipeline from seeded agent-initiated tasks until toggled off. **Metrics**
 (`atlas/metrics`) are computed at the Router: hops, messages, shared/redacted/
 denied, redundant-contacts-avoided, HITL escalations, distinct agents contacted.
 
@@ -147,7 +154,7 @@ Tests inject an offline LLM double, so they run without a key.
 
 **`AWS_BEARER_TOKEN_BEDROCK`** (Bedrock API key) **or** `AWS_ACCESS_KEY_ID` +
 `AWS_SECRET_ACCESS_KEY` — **required** · `AWS_REGION` (us-east-1) · `ATLAS_SEED` (42) ·
-`ATLAS_CRON_BURST_SECONDS` (15) · `ATLAS_HITL_TIMEOUT_SECONDS` (0) ·
+`ATLAS_CRON_GOAL_SECONDS` (30, continuous-goal cadence) · `ATLAS_HITL_TIMEOUT_SECONDS` (0) ·
 `ATLAS_BEDROCK_REASONING_MODEL` / `ATLAS_BEDROCK_PHRASING_MODEL` (model overrides).
 
 ## Repo layout

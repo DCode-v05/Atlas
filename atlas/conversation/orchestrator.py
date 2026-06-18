@@ -92,12 +92,33 @@ class Orchestrator:
         self._bg: set[asyncio.Task] = set()
 
     # ── public entry points ────────────────────────────────────────────────
+    def _org_summary(self) -> str:
+        """A concise description of the company for the LLM scope gate to judge against."""
+        depts = ", ".join(sorted(self.snapshot.departments.keys()))
+        projects = ", ".join(sorted(self.snapshot.projects.keys()))
+        return (
+            f"Atlas, a software product company. Departments: {depts}. "
+            f"Active projects: {projects}. Its agents only hold and discuss internal "
+            f"company context — people, teams, projects, products, data, and operations."
+        )
+
     async def run_user_prompt(self, prompt: str, human_name: str = "Operator") -> dict:
         """Gate + route (LLM re-rank when available), then run the scenario async."""
         ok, reason = self.router.org_scope_gate(prompt)
+        # Authoritative LLM semantic gate: Mistral judges company-relevance on
+        # every prompt it can reach, overriding the cheap lexical pre-check (so
+        # "write a python script for wifi" is refused despite sharing the word
+        # "python" with engineering's skills). If the LLM is unavailable or the
+        # call fails/throttles, we fall back to the lexical verdict above.
+        if self.llm.available:
+            verdict = await self.llm.judge_scope(prompt, org_summary=self._org_summary())
+            if verdict is True:
+                ok, reason = True, ""
+            elif verdict is False:
+                ok, reason = False, GATE_REASON
         if not ok:
-            self.router.reject(prompt, reason)
-            return {"rejected": True, "reason": reason}
+            self.router.reject(prompt, reason or GATE_REASON)
+            return {"rejected": True, "reason": reason or GATE_REASON}
         chosen, scored = self.router.route_prompt(prompt)
         if not chosen:
             self.router.reject(prompt, GATE_REASON)
@@ -134,15 +155,28 @@ class Orchestrator:
             "routed_to_role": agent.profile.role_title,
         }
 
-    def run_cron_task(self, initiator_id: str, prompt: str) -> Optional[str]:
-        """Autonomous task initiated by an agent (cron simulation). Load-sheds when
+    def run_cron_task(self, initiator_id: str, prompt: str, *, label: Optional[str] = None) -> Optional[str]:
+        """Autonomous goal initiated by an agent (cron simulation). Load-sheds when
         too many scenarios are already in flight — this is what keeps the LLM call
-        volume (and rate-limit pressure) bounded during a burst."""
+        volume (and rate-limit pressure) bounded. NOTE: the cron path deliberately
+        does NOT run the LLM scope gate (goals are in-scope by construction), so it
+        never spends a gate call against the rate-limit budget."""
         if self._cron_active >= self.cron_max_inflight:
             return None
         self._cron_active += 1
         context_id = new_id("cron-")
         task = self.router.new_task(context_id, message=prompt, role="agent")
+        agent = self.registry.get(initiator_id)
+        # Surface the goal so the conversation timeline can show a "goal opened"
+        # header (initiator = the agent that autonomously launched it).
+        self.broker.emit(
+            EventType.PROMPT_ACCEPTED,
+            PromptAcceptedPayload(
+                prompt=prompt, task_id=task.id, context_id=context_id,
+                routed_to=initiator_id, routed_to_name=agent.name,
+            ),
+            context_id=context_id,
+        )
         self._spawn(self._run_scenario(prompt, initiator_id, context_id, task.id, cron=True))
         return context_id
 

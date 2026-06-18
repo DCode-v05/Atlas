@@ -76,11 +76,14 @@ async def test_prompt_completes_with_hitl_approval_and_metrics(client):
 
 async def test_cron_toggle_via_api(client):
     c, rt = client
-    rt.cron.burst_seconds = 0.4
-    rt.cron.tick_seconds = 0.1
+    rt.cron.goal_seconds = 0.2
+    rt.cron.tick_seconds = 0.05
     r = await c.post("/api/cron", json={"on": True})
     assert r.json()["running"] is True
-    await asyncio.sleep(0.9)
+    await asyncio.sleep(0.5)
+    assert rt.cron.running is True  # continuous — runs until toggled off
+    r = await c.post("/api/cron", json={"on": False})
+    assert r.json()["running"] is False
     assert rt.cron.running is False
 
 

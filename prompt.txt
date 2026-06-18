@@ -1,62 +1,56 @@
-# Atlas — 50 sample prompts to task the organisation.
+# Atlas — sample prompts to task the organisation.
 # One prompt per line; lines starting with '#' are category headers (ignore them
 # to get the raw list, e.g.  grep -v '^#' prompt.txt ).
-# These are designed to exercise every path: routing to each department, the four
-# need-to-know outcomes (share / redact / deny / escalate-to-HITL), group vs 1:1
-# coordination, executive routing, and the out-of-scope gate.
+# Organised so EVERY department/team gets exercised — not just Engineering — plus
+# cross-functional prompts that pull several teams into one conversation, and the
+# four need-to-know outcomes (share / redact / deny / escalate-to-HITL).
 
-# ── Engineering & build ──────────────────────────────────────────────────────
-Fix the billing Stripe payment integration and pull the live API credentials.
+# ── Engineering ──────────────────────────────────────────────────────────────
 I'm adding a new REST endpoint — share the engineering API style guide and conventions.
-The auth service is returning 429s; I need the rate-limit configuration to tune it.
-Help me debug the mobile build — I need the app-store signing certificate.
 I'm refactoring the event pipeline; what's the Atlas Core architecture decision record?
-I need the production database read-replica connection string to validate a migration.
+The auth service is returning 429s; I need the rate-limit configuration to tune it.
 Review my payments-module pull request and flag any security concerns.
-The checkout API times out under load — help me profile and scale the service.
 
-# ── Product & roadmap ────────────────────────────────────────────────────────
+# ── Product ──────────────────────────────────────────────────────────────────
 When is the Q3 launch and what's on the product roadmap?
 What unreleased features are planned for the mobile app this quarter?
-What's the upcoming pricing change for the billing revamp on the product roadmap?
 Draft the PRD for the new onboarding flow and align it to the roadmap.
 What public roadmap highlights can I share with a customer on a call?
-Prioritise next sprint's backlog from the latest customer feedback.
-Define the success metrics for the analytics revamp.
 
-# ── QA & release ─────────────────────────────────────────────────────────────
+# ── QA ───────────────────────────────────────────────────────────────────────
 Coordinate release verification and testing sign-off with the QA team.
+Triage the open bugs for the mobile release and assign severity with the team.
 Write an automated regression suite for the checkout flow.
-Triage the open bugs for the mobile release and assign severity.
-Run a load test on the auth service before we ship.
 
-# ── DevOps / SRE & incidents ─────────────────────────────────────────────────
+# ── DevOps / SRE ─────────────────────────────────────────────────────────────
 Production incident on the auth service — coordinate the on-call response with the team.
 The deployment pipeline is failing; help me debug the CI/CD configuration.
-Set up observability and alerting for the new notifications service.
 Plan Kubernetes capacity ahead of the launch with the team.
 
-# ── Sales & deals ────────────────────────────────────────────────────────────
+# ── Sales ────────────────────────────────────────────────────────────────────
 A customer wants to renegotiate — I need the Acme Corp contract terms.
 What's the Q3 revenue forecast for the board deck?
-Qualify these inbound leads and update the CRM pipeline.
-Prepare an enterprise proposal and loop in the deal team.
+Qualify these inbound leads and update the CRM pipeline with the deal team.
 
 # ── Design ───────────────────────────────────────────────────────────────────
 Design the new onboarding UX wireframes and a clickable prototype.
 Align the team on the mobile app's visual design system.
-Review the checkout flow for usability issues.
+Review the checkout flow for usability issues with the team.
 
 # ── Data / ML ────────────────────────────────────────────────────────────────
 I need access to the production user PII dataset to train a churn model.
 Build an ETL pipeline for the new analytics events.
-Set up an A/B experiment for the onboarding change and define the metrics.
+Set up an A/B experiment for the onboarding change and define the metrics with the team.
 
-# ── Marketing & Support ──────────────────────────────────────────────────────
+# ── Marketing ────────────────────────────────────────────────────────────────
 Plan the launch campaign and coordinate the messaging with the team.
 Draft the release notes and update the knowledge base for the new feature.
-A customer escalation came in about a billing charge — help me resolve the ticket.
 Improve the SEO and growth funnel for the signup page.
+
+# ── Support ──────────────────────────────────────────────────────────────────
+A customer escalation came in about a billing charge — help me resolve the ticket.
+Update the support knowledge base for the new onboarding flow with the team.
+Summarise this week's top support themes for the product team.
 
 # ── Security ─────────────────────────────────────────────────────────────────
 Security incident — I need the embargoed vulnerability details to respond.
@@ -66,15 +60,26 @@ Audit our access controls and secrets management for compliance.
 
 # ── People / HR ──────────────────────────────────────────────────────────────
 What's the L3 compensation band for an offer I'm preparing?
-We need to hire two backend engineers — kick off recruiting.
+We need to hire two backend engineers — kick off recruiting with the team.
 Plan onboarding for next month's new hires with the team.
 
 # ── Executive & strategy ─────────────────────────────────────────────────────
 What's the company strategy and OKRs for next quarter?
-Are there any acquisition or M&A talks affecting company strategy that I should brief the board on?
+Are there any acquisition or M&A talks affecting strategy I should brief the board on?
 What's the company's plan for the upcoming organisational restructuring?
+
+# ── Cross-functional (pull several teams into one conversation) ───────────────
+Launch readiness review — coordinate engineering, QA, and DevOps for the Q3 ship.
+Plan the Q3 launch with product, design, and marketing aligned on the go-to-market.
+A SEV-1 billing outage — get DevOps, engineering, and support on the incident together.
+Prep the board deck — align sales forecast, product roadmap, and finance with leadership.
+
+# ── Sensitive single-target (drive redact / deny / escalate-to-HITL) ──────────
+Fix the billing Stripe payment integration and pull the live API credentials.
+Help me debug the mobile build — I need the app-store signing certificate.
+I need the production database read-replica connection string to validate a migration.
 
 # ── Out-of-scope (the gateway should block these) ────────────────────────────
 What's the weather in Paris this weekend?
 Recommend a good Italian pasta recipe for dinner.
-Who won the football match last night?
+Give me a python script to generate random wifi passwords.

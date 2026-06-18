@@ -3,46 +3,49 @@
 @tailwind utilities;
 
 /* ════════════════════════════════════════════════════════════════════════════
-   ATLAS — "Obsidian Observatory"
-   A premium deep-space telemetry instrument. Glass panels float over an obsidian
-   field lit by a soft aurora dome, with a fine constellation grid and grain.
+   ATLAS — "Command Deck" (light)
+   A bright editorial operations deck. Warm paper field, crisp white cards with
+   hairline rules, ink-black text, a confident cobalt accent, and an editorial
+   serif for headings over a clean grotesque body. Built to make the live agent
+   conversation the centre of attention and easy to read.
    ════════════════════════════════════════════════════════════════════════════ */
 :root {
-  /* base field */
-  --bg: #07090e;
-  --bg-2: #0a0d13;
-  --void: #050609;
+  /* field + surfaces */
+  --bg: #f3f1ea;
+  --bg-2: #ece9e0;
+  --void: #e6e3d9;
+  --surface: #ffffff;
+  --surface-2: #fbfaf6;
+  --panel: #ffffff;
+  --panel-solid: #ffffff;
+  --inset: #f4f2eb;
+  --hi: rgba(255, 255, 255, 0.6);
 
-  /* glass surfaces (translucent — grain & glow show through) */
-  --surface: rgba(18, 24, 32, 0.62);
-  --surface-2: rgba(23, 30, 40, 0.7);
-  --panel: rgba(14, 19, 26, 0.66);
-  --panel-solid: #0e131a;
-  --inset: rgba(0, 0, 0, 0.35);
-  --hi: rgba(255, 255, 255, 0.055); /* top highlight */
-
-  /* strokes */
-  --border: rgba(150, 180, 200, 0.1);
-  --border-bright: rgba(160, 190, 210, 0.2);
+  /* strokes + grid */
+  --border: rgba(30, 41, 53, 0.13);
+  --border-bright: rgba(30, 41, 53, 0.3);
+  --grid-line: rgba(40, 55, 70, 0.045);
 
   /* ink */
-  --text: #e8eef4;
-  --text-2: #b3bECB;
-  --muted: #8794a3;
-  --faint: #586472;
+  --text: #181c22;
+  --text-2: #3a4350;
+  --muted: #5c6675;
+  --faint: #98a1ad;
 
-  /* signal accent — aurora mint (live / interactive / shared) */
-  --accent: #6ee7c7;
-  --accent-bright: #8af5d6;
-  --accent-soft: rgba(110, 231, 199, 0.13);
-  --accent-glow: rgba(110, 231, 199, 0.45);
+  /* accent — confident cobalt (brand / active / interactive) */
+  --accent: #2f4bdb;
+  --accent-bright: #4f6bff;
+  --accent-soft: rgba(47, 75, 219, 0.1);
+  --accent-glow: rgba(47, 75, 219, 0.3);
 
-  /* warm + semantic */
-  --gold: #f3b664;    /* cron / simulation */
-  --violet: #b79cff;  /* human-in-the-loop */
-  --coral: #ff6b81;   /* alert / denied */
-  --amber: #f2b366;   /* redacted / caution */
-  --ok: #6ee7c7;
+  /* semantic signal hues — all readable on white */
+  --ok: #0a8f5b;     /* shared */
+  --cyan: #0e8fa8;   /* info / internal / handoff */
+  --amber: #b9710a;  /* redact / caution */
+  --gold: #c2680a;   /* cron / simulation (token kept as 'gold') */
+  --violet: #6d28d9; /* human-in-the-loop */
+  --coral: #d12a3a;  /* deny / alert (token kept as 'coral') */
+  --red: #d12a3a;
 }
 
 * { box-sizing: border-box; }
@@ -51,104 +54,100 @@ html, body, #root { height: 100%; margin: 0; }
 body {
   background-color: var(--bg);
   color: var(--text);
-  font-family: "Hanken Grotesk", system-ui, sans-serif;
+  font-family: "Public Sans", system-ui, sans-serif;
   font-size: 13px;
-  letter-spacing: 0.005em;
+  letter-spacing: 0.002em;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   overflow: hidden;
   background-image:
-    /* observatory dome glow */
-    radial-gradient(80% 55% at 50% -8%, rgba(110, 231, 199, 0.07), transparent 60%),
-    radial-gradient(60% 50% at 92% 8%, rgba(183, 156, 255, 0.05), transparent 55%),
-    radial-gradient(70% 60% at 6% 100%, rgba(243, 182, 100, 0.04), transparent 55%),
-    /* constellation dotted grid */
-    radial-gradient(rgba(150, 180, 210, 0.06) 1px, transparent 1.4px),
-    linear-gradient(180deg, var(--bg) 0%, var(--void) 100%);
-  background-size: 100% 100%, 100% 100%, 100% 100%, 34px 34px, 100% 100%;
+    /* faint warm light from top */
+    radial-gradient(70% 50% at 50% -8%, rgba(47, 75, 219, 0.04), transparent 60%),
+    /* fine engineering grid */
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
+  background-size: 100% 100%, 44px 44px, 44px 44px, 100% 100%;
 }
 
-/* grain + faint vignette overlay */
-body::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 1;
-  background-image:
-    radial-gradient(130% 110% at 50% 50%, transparent 62%, rgba(0, 0, 0, 0.5) 100%),
-    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.012) 0, rgba(255, 255, 255, 0.012) 1px, transparent 1px, transparent 3px);
-  mix-blend-mode: soft-light;
-}
-
-/* ─── glass chrome ─────────────────────────────────────────────────────────── */
+/* ─── cards / panels ─────────────────────────────────────────────────────── */
+.panel,
 .glass {
-  background:
-    linear-gradient(180deg, var(--hi), transparent 14%),
-    linear-gradient(180deg, var(--surface), var(--panel));
+  position: relative;
+  background: var(--panel);
   border: 1px solid var(--border);
-  box-shadow:
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.04),
-    inset 0 0 24px -16px rgba(110, 231, 199, 0.15),
-    0 14px 40px -22px rgba(0, 0, 0, 0.8);
-  backdrop-filter: blur(10px) saturate(1.1);
+  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.7) inset, 0 10px 30px -22px rgba(20, 30, 50, 0.35);
 }
+.panel-flat,
 .glass-flat {
-  background: linear-gradient(180deg, var(--surface), var(--panel));
+  position: relative;
+  background: var(--surface);
   border: 1px solid var(--border);
 }
 .inset {
   background: var(--inset);
-  border: 1px solid rgba(0, 0, 0, 0.4);
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--border);
 }
 .hairline { border-color: var(--border); }
-.lume { box-shadow: 0 0 0 1px var(--accent-soft), 0 0 22px -6px var(--accent-glow); }
+.lume { box-shadow: 0 0 0 1px var(--accent-soft), 0 8px 22px -12px var(--accent-glow); }
 
-/* type helpers */
-.font-display { font-family: "Syne", sans-serif; letter-spacing: -0.01em; }
-.mono { font-family: "Spline Sans Mono", ui-monospace, monospace; font-feature-settings: "tnum"; }
+/* corner-bracket frame (rendered via the <Brackets/> helper) */
+.bracket {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  pointer-events: none;
+  opacity: 0.6;
+}
+.bracket-tl { top: -1px; left: -1px; border-top: 1.5px solid var(--bracket-c, var(--border-bright)); border-left: 1.5px solid var(--bracket-c, var(--border-bright)); }
+.bracket-tr { top: -1px; right: -1px; border-top: 1.5px solid var(--bracket-c, var(--border-bright)); border-right: 1.5px solid var(--bracket-c, var(--border-bright)); }
+.bracket-bl { bottom: -1px; left: -1px; border-bottom: 1.5px solid var(--bracket-c, var(--border-bright)); border-left: 1.5px solid var(--bracket-c, var(--border-bright)); }
+.bracket-br { bottom: -1px; right: -1px; border-bottom: 1.5px solid var(--bracket-c, var(--border-bright)); border-right: 1.5px solid var(--bracket-c, var(--border-bright)); }
+
+/* ─── type system ────────────────────────────────────────────────────────── */
+.font-display { font-family: "Fraunces", Georgia, serif; letter-spacing: -0.01em; }
+.mono { font-family: "JetBrains Mono", ui-monospace, monospace; font-feature-settings: "tnum"; }
 .tnum { font-variant-numeric: tabular-nums; }
 .eyebrow {
-  font-family: "Spline Sans Mono", monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 9.5px;
-  letter-spacing: 0.2em;
+  font-weight: 600;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: var(--faint);
+  color: var(--muted);
 }
-.brand-glow { text-shadow: 0 0 20px var(--accent-glow), 0 0 2px rgba(110, 231, 199, 0.4); }
+.idx {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+}
+.brand-glow { text-shadow: none; }
 
 input, button, textarea { font-family: inherit; }
 input::placeholder { color: var(--faint); }
 button { cursor: pointer; }
 
 /* ─── scrollbars ─────────────────────────────────────────────────────────── */
-::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(150, 180, 200, 0.16); border-radius: 6px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(150, 180, 200, 0.3); }
+::-webkit-scrollbar-thumb { background: rgba(30, 41, 53, 0.18); border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(30, 41, 53, 0.32); }
 
 /* ─── keyframes ───────────────────────────────────────────────────────────── */
-@keyframes pulse-ring { 0% { transform: scale(0.85); opacity: 0.7; } 100% { transform: scale(2); opacity: 0; } }
-@keyframes flicker { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
-@keyframes rise { from { transform: translateY(10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-@keyframes slide-in { from { transform: translateX(16px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-@keyframes sheen { 0% { background-position: -160% 0; } 100% { background-position: 260% 0; } }
-@keyframes drift { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
+@keyframes pulse-ring { 0% { transform: scale(0.85); opacity: 0.6; } 100% { transform: scale(2); opacity: 0; } }
+@keyframes flicker { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+@keyframes boot-in { from { transform: translateY(8px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@keyframes slide-in { from { transform: translateX(14px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+@keyframes rise-in { from { transform: translateY(10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@keyframes tick { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
 .animate-pulse-ring { animation: pulse-ring 1.7s ease-out infinite; }
 .animate-flicker { animation: flicker 1.8s ease-in-out infinite; }
-.animate-rise { animation: rise 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
-.animate-slide-in { animation: slide-in 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
-
-/* shimmer sweep used on the brand + live accents */
-.sheen {
-  background: linear-gradient(100deg, transparent 30%, rgba(110, 231, 199, 0.5) 50%, transparent 70%);
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  animation: sheen 6s linear infinite;
-}
+.animate-rise { animation: boot-in 0.5s cubic-bezier(0.16, 0.8, 0.24, 1) both; }
+.animate-slide-in { animation: slide-in 0.26s cubic-bezier(0.16, 0.8, 0.24, 1) both; }
+.animate-msg { animation: rise-in 0.32s cubic-bezier(0.16, 0.8, 0.24, 1) both; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

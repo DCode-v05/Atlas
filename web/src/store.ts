@@ -25,16 +25,19 @@ export interface LiveLink {
   born: number;
 }
 
-interface ContextMeta {
+export interface ContextMeta {
   contextId: string;
   prompt?: string;
   routedTo?: string;
   routedToName?: string;
   state?: string;
   kind: "user" | "cron";
+  ts: number;
 }
 
-type View = "comms" | "hierarchy" | "cards";
+export type Decision = ContextSharePayload & { kind: string; ts: number };
+
+type View = "convo" | "network" | "roster";
 
 interface State {
   conn: "connecting" | "live" | "down";
@@ -43,10 +46,11 @@ interface State {
   status: Record<string, string>;
   links: LiveLink[];
   messagesByCtx: Record<string, ChatMessage[]>;
-  decisionsByCtx: Record<string, (ContextSharePayload & { kind: string })[]>;
+  decisionsByCtx: Record<string, Decision[]>;
   threads: Record<string, ThreadCreatedPayload>;
   groups: Record<string, GroupFormedPayload>;
   contexts: Record<string, ContextMeta>;
+  contextOrder: string[]; // most-recent-activity first — drives the conversation timeline
   hitl: HitlItem[];
   hitlResolvedCount: number;
   metricsTotals: Record<string, any>;
@@ -73,6 +77,7 @@ interface State {
 }
 
 const FEED_CAP = 220;
+const CTX_CAP = 30;
 const LINK_TTL = 2600;
 const now = () => Date.now();
 
@@ -87,15 +92,16 @@ export const useStore = create<State>((set, get) => ({
   threads: {},
   groups: {},
   contexts: {},
+  contextOrder: [],
   hitl: [],
   hitlResolvedCount: 0,
   metricsTotals: {},
   metricsByCtx: {},
-  cron: { running: false, elapsed: 0, remaining: 0, planned: null, burst: 15 },
+  cron: { running: false, elapsed: 0, remaining: 0, planned: null, burst: 30 },
   feed: [],
   gate: null,
   llm: null,
-  view: "comms",
+  view: "convo",
   deptFilter: null,
   selectedContext: null,
   selectedAgent: null,
@@ -127,7 +133,6 @@ export const useStore = create<State>((set, get) => ({
     const type = env.event;
     if (type === "ready" || type === "ping") return;
     if (!KNOWN_EVENTS.has(type)) {
-      // dev-mode drift catch
       // eslint-disable-next-line no-console
       console.warn("[atlas] unknown SSE event (contract drift?):", type, env);
       return;
@@ -139,6 +144,13 @@ export const useStore = create<State>((set, get) => ({
       const item: FeedItem = { id: env.id, kind: type, ts: env.ts, text, tone, contextId: env.context_id };
       const feed = [item, ...s.feed].slice(0, FEED_CAP);
       set({ feed });
+    };
+
+    // move a context to the front of the timeline order
+    const touch = (cid?: string | null) => {
+      if (!cid) return;
+      const order = [cid, ...get().contextOrder.filter((x) => x !== cid)].slice(0, CTX_CAP);
+      set({ contextOrder: order });
     };
 
     const upsertLink = (source: string, target: string, opts: Partial<LiveLink>) => {
@@ -164,7 +176,8 @@ export const useStore = create<State>((set, get) => ({
         set({ status: { ...get().status, [d.agent_id]: d.status } });
         break;
 
-      case "prompt.accepted":
+      case "prompt.accepted": {
+        const isCron = String(d.context_id).startsWith("cron-");
         set({
           contexts: {
             ...get().contexts,
@@ -174,14 +187,18 @@ export const useStore = create<State>((set, get) => ({
               routedTo: d.routed_to,
               routedToName: d.routed_to_name,
               state: "working",
-              kind: "user",
+              kind: isCron ? "cron" : "user",
+              ts: now(),
             },
           },
           gate: null,
         });
-        upsertLink("operator", d.routed_to, { intent: "task-context", mode: "individual" });
-        pushFeed(`Prompt routed to ${d.routed_to_name}`, "accent");
+        touch(d.context_id);
+        // only the operator "routes" interactive prompts; cron goals are self-initiated
+        if (!isCron) upsertLink("operator", d.routed_to, { intent: "task-context", mode: "individual" });
+        pushFeed(isCron ? `Goal launched · ${d.routed_to_name}` : `Prompt routed to ${d.routed_to_name}`, isCron ? "info" : "accent");
         break;
+      }
 
       case "gate.rejected":
         set({ gate: d as GateRejectedPayload });
@@ -190,7 +207,8 @@ export const useStore = create<State>((set, get) => ({
 
       case "discovery.matched":
         if (d.level === 1 && d.chosen) {
-          upsertLink("operator", d.chosen, { intent: "task-context", mode: "individual" });
+          const isCron = String(env.context_id).startsWith("cron-");
+          if (!isCron) upsertLink("operator", d.chosen, { intent: "task-context", mode: "individual" });
         }
         pushFeed(
           d.level === 1
@@ -205,7 +223,7 @@ export const useStore = create<State>((set, get) => ({
         set({
           contexts: {
             ...get().contexts,
-            [d.context_id]: { ...(ctx || { contextId: d.context_id, kind: "cron" }), state: d.state },
+            [d.context_id]: { ...(ctx || { contextId: d.context_id, kind: "cron", ts: now() }), state: d.state },
           },
         });
         if (d.state === "input-required") pushFeed(`Task awaiting approval`, "hitl");
@@ -219,6 +237,7 @@ export const useStore = create<State>((set, get) => ({
 
       case "group.formed":
         set({ groups: { ...get().groups, [d.group_id]: d as GroupFormedPayload } });
+        touch(d.context_id);
         pushFeed(`Group formed · ${d.members.length} agents · ${d.topic}`, "accent");
         break;
 
@@ -239,6 +258,7 @@ export const useStore = create<State>((set, get) => ({
         };
         const list = [...(get().messagesByCtx[m.context_id] || []), msg].slice(-160);
         set({ messagesByCtx: { ...get().messagesByCtx, [m.context_id]: list } });
+        touch(m.context_id);
         for (const r of m.recipients) {
           if (r === "operator") continue;
           upsertLink(m.sender, r, { intent: m.intent?.purpose_tag, mode: m.mode });
@@ -252,8 +272,9 @@ export const useStore = create<State>((set, get) => ({
       case "context.reused": {
         const c = d as ContextSharePayload;
         const kind = type.split(".")[1];
-        const list = [...(get().decisionsByCtx[c.context_id] || []), { ...c, kind }].slice(-80);
+        const list = [...(get().decisionsByCtx[c.context_id] || []), { ...c, kind, ts: now() }].slice(-80);
         set({ decisionsByCtx: { ...get().decisionsByCtx, [c.context_id]: list } });
+        touch(c.context_id);
         const outcome = kind === "shared" ? "shared" : kind === "redacted" ? "redacted" : kind === "denied" ? "denied" : "reused";
         upsertLink(c.sender, c.recipient, { outcome });
         const tone = kind === "shared" ? "ok" : kind === "redacted" ? "warn" : kind === "denied" ? "danger" : "info";
@@ -265,6 +286,7 @@ export const useStore = create<State>((set, get) => ({
         const h = d as HitlItem;
         set({ hitl: [h, ...get().hitl] });
         upsertLink(h.requester, h.owner, { outcome: "hitl" });
+        touch(h.context_id);
         pushFeed(`Approval needed · ${h.item_title}`, "hitl");
         break;
       }
