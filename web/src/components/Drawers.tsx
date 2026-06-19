@@ -135,7 +135,14 @@ export function AgentCardDrawer() {
           <span className="mono text-[9px] text-faint self-center">{id}</span>
         </div>
 
+        {(card?.goal ?? node?.goal) && (
+          <Section label="Goal · responsibility">
+            <div className="text-[12px] text-ink leading-snug">{card?.goal ?? node?.goal}</div>
+          </Section>
+        )}
+
         <Section label="Reporting line">
+          <Row k="Operated by" v={card?.user ? `${card.user.name} · ${card.user.email}` : nameOf(id)} />
           <Row k="Reports to" v={nameOf(node?.reports_to)} />
           <Row k="Manages" v={node?.manages.length ? `${node.manages.length} report(s)` : "—"} />
           <Row k="Teams" v={node?.teams.join(", ") || "—"} />

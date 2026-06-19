@@ -54,6 +54,12 @@ Other invariants:
 Every non-CEO has a resolvable `reports_to`; `clearance == level` (IC=1 … CEO=5);
 agents belong to teams + 3 projects (`atlas-core`, `billing`, `mobile`). ~18
 **project secrets** are seeded as `ContextItem`s spanning every sensitivity tier.
+Each agent also carries a **`goal`** — a standing responsibility for its dept +
+seniority (CEO=strategy, head=own-the-area, lead=coordinate, IC=execute), the
+agent analogue of a human's job. And each agent has exactly one **`User`**
+associated 1:1 (`generate_org` builds the directory): the human behind the agent.
+`POST /api/prompt` may carry a `user_id` to attribute a prompt to that user (and
+the agent they operate); `GET /api/users` lists the directory.
 
 ## A2A fidelity + the org-extension mechanism
 
@@ -101,10 +107,13 @@ prompt → org-scope gate (LLM-judged) → Level-1 route (→ best agent) → op
   finalize Task → metrics emitted
 ```
 
-The **cron simulator** (`atlas/cron`) — when toggled on — runs *continuously*,
-launching one autonomous **goal every ~30s** (`ATLAS_CRON_GOAL_SECONDS`), **balanced
-across all departments** (round-robin, so it isn't Engineering-heavy), each driving
-this exact pipeline from seeded agent-initiated tasks until toggled off. **Metrics**
+The **cron simulator** (`atlas/cron`) has two modes (`ATLAS_CRON_LOOP`): the default
+is a **15-second burst** (`ATLAS_CRON_BURST_SECONDS`) — when toggled on it fires a
+handful of autonomous goals across the window then **auto-stops** (the spec's "cron
+job, on for 15 seconds"); set `ATLAS_CRON_LOOP=true` for **continuous** mode (one
+goal every `ATLAS_CRON_GOAL_SECONDS` ≈30s until toggled off). Either way goals are
+**balanced across all departments** (round-robin, so it isn't Engineering-heavy),
+each driving this exact pipeline from seeded agent-initiated tasks. **Metrics**
 (`atlas/metrics`) are computed at the Router: hops, messages, shared/redacted/
 denied, redundant-contacts-avoided, HITL escalations, distinct agents contacted.
 
@@ -154,6 +163,7 @@ Tests inject an offline LLM double, so they run without a key.
 
 **`AWS_BEARER_TOKEN_BEDROCK`** (Bedrock API key) **or** `AWS_ACCESS_KEY_ID` +
 `AWS_SECRET_ACCESS_KEY` — **required** · `AWS_REGION` (us-east-1) · `ATLAS_SEED` (42) ·
+`ATLAS_CRON_LOOP` (false = 15s burst; true = continuous) · `ATLAS_CRON_BURST_SECONDS` (15) ·
 `ATLAS_CRON_GOAL_SECONDS` (30, continuous-goal cadence) · `ATLAS_HITL_TIMEOUT_SECONDS` (0) ·
 `ATLAS_BEDROCK_REASONING_MODEL` / `ATLAS_BEDROCK_PHRASING_MODEL` (model overrides).
 

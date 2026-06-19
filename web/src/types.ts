@@ -127,6 +127,7 @@ export interface CronTickPayload {
 export interface CronStatePayload {
   running: boolean;
   burst_seconds: number;
+  mode?: "burst" | "continuous";
 }
 export interface LlmStatusPayload {
   provider: string;
@@ -165,6 +166,8 @@ export interface AgentNode {
   id: string;
   name: string;
   role: string;
+  goal?: string;
+  user_id?: string | null;
   department: string;
   level: number;
   clearance: number;
@@ -243,6 +246,8 @@ export interface ProjectView {
 export interface AgentCardView {
   card: any;
   status: string;
+  goal?: string;
+  user?: { user_id: string; name: string; email: string; agent_id: string; department: string; role_title: string } | null;
   owned_items: {
     item_id: string;
     title: string;

@@ -67,10 +67,16 @@ export function TopBar() {
           background: cron.running ? "rgba(194,104,10,0.08)" : "var(--surface)",
           color: cron.running ? "var(--gold)" : "var(--muted)",
         }}
-        title="Toggle the autonomous simulation — agents launch a new goal every 30s"
+        title={
+          cron.mode === "continuous"
+            ? "Toggle the autonomous simulation — agents launch goals continuously until stopped"
+            : `Toggle the autonomous simulation — a ${cron.burst.toFixed(0)}s burst of agent goals, then auto-stops`
+        }
       >
         {cron.running ? <Square size={12} fill="currentColor" /> : <Play size={13} fill="currentColor" />}
-        <span className="text-[11px] font-bold tracking-wide">SIMULATE</span>
+        <span className="text-[11px] font-bold tracking-wide">
+          SIMULATE{cron.mode === "burst" ? ` ${cron.burst.toFixed(0)}s` : ""}
+        </span>
         {cron.running && <span className="mono text-[10px] tnum w-7 text-right">{cron.remaining.toFixed(0)}s</span>}
       </button>
 

@@ -34,14 +34,42 @@ async def test_org_endpoint_has_100_agents(client):
     assert data["llm"] == "offline"  # the injected test provider (prod = "groq")
 
 
+async def test_org_endpoint_exposes_per_agent_goal(client):
+    c, _ = client
+    nodes = (await c.get("/api/org")).json()["nodes"]
+    assert all(n["goal"] for n in nodes), "every agent node carries a goal"
+    assert all(n["user_id"] for n in nodes), "every agent node is linked to a user"
+
+
 async def test_agent_card_endpoint(client):
     c, _ = client
     r = await c.get("/api/agents/AGT-001/card")
     assert r.status_code == 200
-    assert r.json()["card"]["id"] == "AGT-001"
+    body = r.json()
+    assert body["card"]["id"] == "AGT-001"
+    assert body["goal"]  # standing responsibility surfaced on the card
+    assert body["user"]["agent_id"] == "AGT-001"  # associated 1:1 user
     assert (await c.get("/api/agents/NOPE/card")).status_code == 404
 
 
+async def test_users_endpoint_is_1to1_with_agents(client):
+    c, _ = client
+    data = (await c.get("/api/users")).json()
+    assert data["count"] == 100
+    assert {u["agent_id"] for u in data["users"]} == {f"AGT-{i:03d}" for i in range(1, 101)}
+
+
+async def test_prompt_attributed_to_user(client):
+    c, _ = client
+    r = await c.post(
+        "/api/prompt",
+        json={"prompt": "what is the engineering API style guide?", "user_id": "user-AGT-050"},
+    )
+    data = r.json()
+    if not data.get("rejected"):
+        assert data["submitted_by"]["user_id"] == "user-AGT-050"
+        assert data["submitted_by"]["agent_id"] == "AGT-050"
+    assert (await c.post("/api/prompt", json={"prompt": "hi", "user_id": "nope"})).status_code == 404
 async def test_projects_list_endpoint(client):
     c, _ = client
     data = (await c.get("/api/projects")).json()
@@ -100,12 +128,13 @@ async def test_prompt_completes_with_hitl_approval_and_metrics(client):
 
 async def test_cron_toggle_via_api(client):
     c, rt = client
-    rt.cron.goal_seconds = 0.2
     rt.cron.tick_seconds = 0.05
     r = await c.post("/api/cron", json={"on": True})
-    assert r.json()["running"] is True
+    body = r.json()
+    assert body["running"] is True
+    assert body["mode"] == "burst"  # default 15s burst
     await asyncio.sleep(0.5)
-    assert rt.cron.running is True  # continuous — runs until toggled off
+    assert rt.cron.running is True  # still inside the 15s burst window
     r = await c.post("/api/cron", json={"on": False})
     assert r.json()["running"] is False
     assert rt.cron.running is False

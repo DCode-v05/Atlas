@@ -1,12 +1,19 @@
 """The cron simulation engine.
 
-While toggled on, agents autonomously launch a new **goal every ``cron_goal_seconds``**
-(default 30s) — continuously, not a one-off burst — and work it through the
+When toggled on, agents autonomously launch goals and work each through the
 *identical* orchestrator pipeline, so policy, redaction, and HITL are enforced
 exactly as on the interactive path (escalations land in the same operator queue).
 Goals are **balanced across all departments** (round-robin), so activity isn't
 concentrated in Engineering. The sequence is seeded for reproducibility; message
 phrasing uses the same real Mistral (Amazon Bedrock) as the interactive path.
+
+Two modes (``settings.cron_loop``):
+
+* **burst** (default) — a single ~``cron_burst_seconds`` (15s) window of activity,
+  firing several goals across the window, then **auto-stops**. This is the spec's
+  "cron job — when it is turned on for 15 seconds" simulation.
+* **continuous** — keeps launching one goal every ``cron_goal_seconds`` until
+  toggled off.
 """
 
 from __future__ import annotations
@@ -92,8 +99,12 @@ class CronSimulator:
         self.registry = registry
         self.snapshot = snapshot
         self.broker = broker
+        self.loop_mode = settings.cron_loop          # True = continuous, False = 15s burst
+        self.burst_seconds = settings.cron_burst_seconds
         self.goal_seconds = settings.cron_goal_seconds
         self.tick_seconds = settings.cron_tick_seconds
+        # In burst mode, pace goals so several fire across the window (≈5).
+        self.burst_gap = max(self.tick_seconds, self.burst_seconds / 5.0)
         self.rng = Random(settings.seed * 7919 + 13)
         self.running = False
         self._task: Optional[asyncio.Task] = None
@@ -111,8 +122,17 @@ class CronSimulator:
         return self.rng.choice(ids) if ids else None
 
     # ── control ───────────────────────────────────────────────────────────
+    @property
+    def _window(self) -> float:
+        """The countdown the UI shows: the burst window, or the inter-goal gap."""
+        return self.goal_seconds if self.loop_mode else self.burst_seconds
+
+    @property
+    def _mode(self) -> str:
+        return "continuous" if self.loop_mode else "burst"
+
     def status(self) -> dict:
-        return {"running": self.running, "burst_seconds": self.goal_seconds}
+        return {"running": self.running, "mode": self._mode, "burst_seconds": self._window}
 
     async def toggle(self, on: bool) -> dict:
         if on and not self.running:
@@ -129,38 +149,58 @@ class CronSimulator:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
             self._task = None
-        self.broker.emit(EventType.CRON_STATE, CronStatePayload(running=False, burst_seconds=self.goal_seconds))
+        self.broker.emit(EventType.CRON_STATE, CronStatePayload(running=False, burst_seconds=self._window, mode=self._mode))
 
     async def _run(self) -> None:
-        """Continuous loop: fire a balanced goal, count down ``goal_seconds``, repeat."""
+        """Fire balanced goals. Burst mode stops after ``burst_seconds``; continuous
+        mode keeps going until toggled off. In-flight scenarios are load-shed by the
+        orchestrator and finish on their own after the burst window closes."""
         self.running = True
-        self.broker.emit(EventType.CRON_STATE, CronStatePayload(running=True, burst_seconds=self.goal_seconds))
+        self.broker.emit(EventType.CRON_STATE, CronStatePayload(running=True, burst_seconds=self._window, mode=self._mode))
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        gap = self.goal_seconds if self.loop_mode else self.burst_gap
         i = 0
         try:
             while self.running:
+                # Burst mode: stop launching new goals once the 15s window elapses.
+                if not self.loop_mode and (loop.time() - start) >= self.burst_seconds:
+                    break
                 dept = self._order[i % len(self._order)]
                 i += 1
                 label, prompt = self.rng.choice(DEPT_GOALS[dept])
                 initiator = self._pick_in(dept)
                 if initiator is not None:
                     self.orch.run_cron_task(initiator, prompt, label=f"{dept.value}:{label}")
-                await self._countdown(label)
+                await self._countdown(label, gap, burst_start=None if self.loop_mode else start)
         except asyncio.CancelledError:  # pragma: no cover
             raise
         finally:
             self.running = False
-            self.broker.emit(EventType.CRON_STATE, CronStatePayload(running=False, burst_seconds=self.goal_seconds))
+            self.broker.emit(EventType.CRON_STATE, CronStatePayload(running=False, burst_seconds=self._window, mode=self._mode))
 
-    async def _countdown(self, label: str) -> None:
+    async def _countdown(self, label: str, gap: float, *, burst_start: Optional[float]) -> None:
+        """Tick until ``gap`` elapses (or, in burst mode, the burst window ends).
+
+        The ``remaining`` shown to the UI is the overall burst countdown in burst
+        mode, and the per-goal gap countdown in continuous mode.
+        """
         loop = asyncio.get_running_loop()
         start = loop.time()
         elapsed = 0.0
-        while self.running and elapsed < self.goal_seconds:
+        while self.running and elapsed < gap:
+            if burst_start is not None:
+                burst_elapsed = loop.time() - burst_start
+                if burst_elapsed >= self.burst_seconds:
+                    break
+                remaining = max(0.0, self.burst_seconds - burst_elapsed)
+            else:
+                remaining = max(0.0, gap - elapsed)
             self.broker.emit(
                 EventType.CRON_TICK,
                 CronTickPayload(
                     elapsed=round(elapsed, 1),
-                    remaining=round(max(0.0, self.goal_seconds - elapsed), 1),
+                    remaining=round(remaining, 1),
                     running=True,
                     planned=label,
                 ),
