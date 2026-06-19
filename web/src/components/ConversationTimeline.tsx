@@ -1,10 +1,10 @@
-import { ArrowRight, Bot, Radio, Sparkles, Users } from "lucide-react";
-import type { ChatMessage } from "../types";
+import { ArrowRight, Bot, Check, EyeOff, Radio, ShieldAlert, Sparkles, Users, X } from "lucide-react";
+import type { ChatMessage, HitlItem } from "../types";
 import type { Decision } from "../store";
 import { DEPARTMENT_LABEL, deptColor } from "../theme";
 import { api } from "../api";
 import { useStore } from "../store";
-import { IntentChip, ModeTag, OutcomeBadge, SensitivityShield } from "./ui";
+import { IntentChip, OutcomeBadge, SensitivityShield } from "./ui";
 
 const EXAMPLES = [
   "Plan the Q3 launch with product, design, and marketing aligned on go-to-market",
@@ -39,6 +39,10 @@ function ConversationCard({ cid }: { cid: string }) {
   const decisions = useStore((s) => s.decisionsByCtx[cid]) ?? [];
   const agents = useStore((s) => s.agents);
   const selectContext = useStore((s) => s.selectContext);
+  // NOTE: select the stable array and filter in render — returning a freshly
+  // .filter()'d array from the selector makes useSyncExternalStore loop/crash.
+  const hitl = useStore((s) => s.hitl);
+  const pending = hitl.filter((h) => h.context_id === cid);
 
   const nameOf = (id: string) => (id === "operator" ? "Operator" : agents[id]?.name ?? id);
   const isGroup = messages.some((m) => m.mode === "group");
@@ -59,9 +63,12 @@ function ConversationCard({ cid }: { cid: string }) {
   const stateColor = state === "completed" ? "var(--ok)" : state === "input-required" ? "var(--violet)" : "var(--gold)";
 
   return (
-    <div className="panel-flat rounded-lg overflow-hidden animate-msg">
+    <div
+      className="panel-flat rounded-lg overflow-hidden animate-msg"
+      style={pending.length ? { boxShadow: "0 0 0 1.5px var(--violet), 0 8px 24px -18px rgba(0,0,0,0.4)", borderColor: "var(--violet)" } : undefined}
+    >
       {/* header */}
-      <div className="px-3 py-2.5 border-b" style={{ borderColor: "var(--border)", background: "var(--surface-2)" }}>
+      <div className="px-3 py-2.5 border-b" style={{ borderColor: "var(--border)", background: pending.length ? "rgba(109,40,217,0.05)" : "var(--surface-2)" }}>
         <div className="flex items-start gap-2">
           <span
             className="shrink-0 mt-0.5 inline-flex items-center gap-1 rounded px-1.5 py-0.5 mono text-[8.5px] font-bold uppercase tracking-wider"
@@ -95,7 +102,49 @@ function ConversationCard({ cid }: { cid: string }) {
           r.m ? <MsgRow key={i} m={r.m} agents={agents} nameOf={nameOf} /> : <DecisionRow key={i} d={r.d!} nameOf={nameOf} />,
         )}
         {shown.length === 0 && <div className="text-[11px] text-faint py-1">opening…</div>}
+        {pending.map((h) => <InlineApproval key={h.request_id} h={h} nameOf={nameOf} />)}
       </div>
+    </div>
+  );
+}
+
+function InlineApproval({ h, nameOf }: { h: HitlItem; nameOf: (id: string) => string }) {
+  const removeHitl = useStore((s) => s.removeHitl);
+  const act = async (kind: "share" | "redact" | "deny") => {
+    removeHitl(h.request_id); // optimistic; backend resumes the conversation
+    try {
+      if (kind === "deny") await api.deny(h.request_id);
+      else await api.approve(h.request_id, kind);
+    } catch (e) { console.error(e); }
+  };
+  return (
+    <div className="rounded-md p-2.5 mt-0.5 animate-msg" style={{ background: "rgba(109,40,217,0.06)", border: "1px solid rgba(109,40,217,0.42)" }}>
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <ShieldAlert size={13} color="var(--violet)" className="animate-flicker" />
+        <span className="mono text-[9px] font-bold uppercase tracking-wider" style={{ color: "var(--violet)" }}>Awaiting your approval</span>
+        <span className="ml-auto"><SensitivityShield level={h.sensitivity} withLabel /></span>
+      </div>
+      <div className="text-[11.5px] leading-snug mb-1.5" style={{ color: "var(--text-2)" }}>
+        <span className="font-semibold text-ink">{nameOf(h.requester)}</span> is requesting{" "}
+        <span className="font-semibold text-ink">‘{h.item_title}’</span> from{" "}
+        <span className="font-semibold text-ink">{nameOf(h.owner)}</span>.
+      </div>
+      <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+        <IntentChip tag={h.intent?.purpose_tag} />
+        <span className="text-[10px] text-muted italic truncate max-w-[280px]">“{h.intent?.motivation}”</span>
+      </div>
+      <div className="grid grid-cols-3 gap-1.5">
+        <button onClick={() => act("share")} className="flex items-center justify-center gap-1 h-7 rounded-md text-[10px] font-bold text-white" style={{ background: "var(--ok)" }}>
+          <Check size={12} /> SHARE
+        </button>
+        <button onClick={() => act("redact")} className="flex items-center justify-center gap-1 h-7 rounded-md text-[10px] font-bold" style={{ border: "1px solid var(--amber)", color: "var(--amber)", background: "rgba(185,113,10,0.06)" }}>
+          <EyeOff size={12} /> REDACT
+        </button>
+        <button onClick={() => act("deny")} className="flex items-center justify-center gap-1 h-7 rounded-md text-[10px] font-bold" style={{ border: "1px solid var(--coral)", color: "var(--coral)", background: "rgba(209,42,58,0.06)" }}>
+          <X size={12} /> DENY
+        </button>
+      </div>
+      <div className="mono text-[8.5px] text-faint mt-1.5">the conversation continues based on your decision</div>
     </div>
   );
 }

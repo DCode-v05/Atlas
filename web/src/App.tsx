@@ -25,7 +25,7 @@ function CenterStage() {
   const org = useStore((s) => s.org);
 
   return (
-    <section className="panel rounded-lg relative min-h-0 min-w-0 flex flex-col overflow-hidden">
+    <section className="panel rounded-lg relative h-full min-h-0 min-w-0 flex flex-col overflow-hidden">
       <Brackets color="var(--accent)" />
       {/* tab strip */}
       <div className="flex items-center gap-1 px-2.5 h-11 shrink-0 border-b" style={{ borderColor: "var(--border)" }}>
@@ -79,15 +79,15 @@ export function App() {
 
       <div
         className="flex-1 grid gap-2.5 min-h-0"
-        style={{ gridTemplateColumns: "250px 1fr 360px" }}
+        style={{ gridTemplateColumns: "250px 1fr 360px", gridTemplateRows: "minmax(0, 1fr)" }}
       >
-        <div className="animate-rise min-h-0" style={{ animationDelay: "60ms" }}>
+        <div className="animate-rise min-h-0 overflow-hidden" style={{ animationDelay: "60ms" }}>
           <TeamsPanel />
         </div>
-        <div className="animate-rise min-h-0 min-w-0" style={{ animationDelay: "120ms" }}>
+        <div className="animate-rise min-h-0 min-w-0 overflow-hidden" style={{ animationDelay: "120ms" }}>
           <CenterStage />
         </div>
-        <div className="animate-rise min-h-0" style={{ animationDelay: "180ms" }}>
+        <div className="animate-rise min-h-0 overflow-hidden" style={{ animationDelay: "180ms" }}>
           <RightRail />
         </div>
       </div>

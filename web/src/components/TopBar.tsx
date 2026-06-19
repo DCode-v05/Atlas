@@ -9,6 +9,7 @@ export function TopBar() {
   const cron = useStore((s) => s.cron);
   const hitlCount = useStore((s) => s.hitl.length);
   const llm = useStore((s) => s.llm);
+  const setView = useStore((s) => s.setView);
 
   const submit = async (p?: string) => {
     const prompt = (p ?? text).trim();
@@ -88,15 +89,20 @@ export function TopBar() {
         <span className="mono text-[9.5px] uppercase tracking-wide" style={{ color: connColor }}>{conn}</span>
       </div>
 
-      {/* hitl bell */}
-      <div className="relative shrink-0 grid place-items-center w-10 h-10 rounded-md" style={{ border: `1px solid ${hitlCount ? "var(--violet)" : "var(--border)"}`, background: hitlCount ? "rgba(109,40,217,0.07)" : "var(--surface)" }} title={`${hitlCount} approval(s) pending`}>
+      {/* hitl bell — jumps to the conversation where approvals are handled inline */}
+      <button
+        onClick={() => setView("convo")}
+        className="relative shrink-0 grid place-items-center w-10 h-10 rounded-md transition-transform hover:scale-[1.04]"
+        style={{ border: `1px solid ${hitlCount ? "var(--violet)" : "var(--border)"}`, background: hitlCount ? "rgba(109,40,217,0.07)" : "var(--surface)" }}
+        title={hitlCount ? `${hitlCount} approval(s) awaiting — review inline in the conversation` : "No approvals pending"}
+      >
         <Bell size={16} color={hitlCount ? "var(--violet)" : "var(--muted)"} className={hitlCount ? "animate-flicker" : ""} />
         {hitlCount > 0 && (
           <span className="absolute -top-1.5 -right-1.5 min-w-[17px] h-[17px] px-1 grid place-items-center rounded-full text-[10px] font-bold mono text-white" style={{ background: "var(--violet)" }}>
             {hitlCount}
           </span>
         )}
-      </div>
+      </button>
     </header>
   );
 }
