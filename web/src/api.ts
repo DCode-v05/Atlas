@@ -1,4 +1,4 @@
-import type { AgentCardView, OrgView } from "./types";
+import type { AgentCardView, OrgView, ProjectSummary, ProjectView } from "./types";
 
 const BASE = "/api";
 
@@ -21,6 +21,8 @@ export const api = {
   hitl: () => j<{ pending: any[]; resolved_count: number }>("/hitl"),
   tasks: () => j("/tasks"),
   thread: (cid: string) => j(`/threads/${cid}`),
+  projects: () => j<{ count: number; projects: ProjectSummary[] }>("/projects"),
+  project: (id: string) => j<ProjectView>(`/projects/${id}`),
   prompt: (prompt: string, human = "Operator") => j("/prompt", jsonPost({ prompt, human })),
   cron: (on: boolean) => j("/cron", jsonPost({ on })),
   approve: (id: string, outcome: "share" | "redact" = "share") =>

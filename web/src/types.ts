@@ -191,6 +191,55 @@ export interface OrgView {
   llm: string;
   llm_status?: LlmStatusPayload | null;
 }
+// ─── Projects Workspace (atlas/api/projects.py) ──────────────────────────────
+export interface ProjectSummary {
+  project_id: string;
+  members: number;
+  departments: number;
+  secrets: number;
+}
+export interface ProjectMember {
+  agent_id: string;
+  name: string;
+  role: string;
+  department: string;
+  level: number;
+  level_label: string;
+  clearance: number;
+}
+export interface ProjectSecret {
+  item_id: string;
+  title: string;
+  sensitivity: string;
+  owner_agent_id: string;
+  owner_name: string;
+}
+export interface ProjectThread {
+  thread_id: string;
+  context_id: string;
+  topic: string;
+  participants: string[];
+  messages: number;
+}
+export interface ProjectGroup {
+  group_id: string;
+  context_id: string;
+  topic: string;
+  initiator: string;
+  members: number;
+  members_in_project: number;
+  messages: number;
+  active: boolean;
+}
+export interface ProjectView {
+  project_id: string;
+  members: ProjectMember[];
+  departments: { department: string; count: number }[];
+  secrets: ProjectSecret[];
+  conversations: { threads: ProjectThread[]; groups: ProjectGroup[] };
+  stats: { members: number; departments: number; secrets: number; active_conversations: number };
+}
+
 export interface AgentCardView {
   card: any;
   status: string;
