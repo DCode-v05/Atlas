@@ -12,6 +12,7 @@ import asyncio
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from sse_starlette.sse import EventSourceResponse
 
+from atlas.api.projects import build_project_view, list_projects
 from atlas.api.viewmodels import agent_card_view, build_org_view, thread_view
 from atlas.config import get_settings
 from atlas.org.ext_models import ShareOutcome
@@ -57,6 +58,19 @@ def users(request: Request):
         "count": len(rt.snapshot.users),
         "users": [u.model_dump(mode="json") for u in rt.snapshot.users.values()],
     }
+@router.get("/projects")
+def projects(request: Request):
+    """All projects with a compact summary (members / departments / secrets)."""
+    return list_projects(_rt(request))
+
+
+@router.get("/projects/{project_id}")
+def project_detail(project_id: str, request: Request):
+    """A project as a unit: cross-department members, scoped secrets, live coordination."""
+    view = build_project_view(_rt(request), project_id)
+    if view is None:
+        raise HTTPException(404, "unknown project")
+    return view
 
 
 @router.get("/metrics")

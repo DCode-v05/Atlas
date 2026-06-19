@@ -70,6 +70,28 @@ async def test_prompt_attributed_to_user(client):
         assert data["submitted_by"]["user_id"] == "user-AGT-050"
         assert data["submitted_by"]["agent_id"] == "AGT-050"
     assert (await c.post("/api/prompt", json={"prompt": "hi", "user_id": "nope"})).status_code == 404
+async def test_projects_list_endpoint(client):
+    c, _ = client
+    data = (await c.get("/api/projects")).json()
+    assert data["count"] == 3
+    ids = {p["project_id"] for p in data["projects"]}
+    assert ids == {"atlas-core", "billing", "mobile"}
+    for p in data["projects"]:
+        assert p["members"] > 0 and p["departments"] >= 1
+
+
+async def test_project_detail_is_cross_department_and_scoped(client):
+    c, _ = client
+    r = await c.get("/api/projects/atlas-core")
+    assert r.status_code == 200
+    view = r.json()
+    # cross-department by construction (Eng + Product + QA + Design + Data touch atlas-core)
+    assert view["stats"]["departments"] >= 4
+    assert view["stats"]["members"] == len(view["members"])
+    # every surfaced secret is actually scoped to this project — and bodies are never exposed
+    for s in view["secrets"]:
+        assert "body" not in s
+    assert (await c.get("/api/projects/nope")).status_code == 404
 
 
 async def test_out_of_scope_prompt_is_gated(client):

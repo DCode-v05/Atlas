@@ -37,7 +37,7 @@ export interface ContextMeta {
 
 export type Decision = ContextSharePayload & { kind: string; ts: number };
 
-type View = "convo" | "network" | "roster";
+type View = "convo" | "network" | "roster" | "projects";
 
 interface State {
   conn: "connecting" | "live" | "down";
