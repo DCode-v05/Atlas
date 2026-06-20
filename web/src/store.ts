@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import type {
   AgentNode,
+  AgentThought,
+  AgentThoughtPayload,
   ChatMessage,
   ContextSharePayload,
   EventEnvelope,
@@ -46,6 +48,8 @@ interface State {
   status: Record<string, string>;
   links: LiveLink[];
   messagesByCtx: Record<string, ChatMessage[]>;
+  thoughtsByCtx: Record<string, AgentThought[]>;
+  thoughtsByAgent: Record<string, AgentThought[]>;
   decisionsByCtx: Record<string, Decision[]>;
   threads: Record<string, ThreadCreatedPayload>;
   groups: Record<string, GroupFormedPayload>;
@@ -88,6 +92,8 @@ export const useStore = create<State>((set, get) => ({
   status: {},
   links: [],
   messagesByCtx: {},
+  thoughtsByCtx: {},
+  thoughtsByAgent: {},
   decisionsByCtx: {},
   threads: {},
   groups: {},
@@ -176,6 +182,19 @@ export const useStore = create<State>((set, get) => ({
         set({ status: { ...get().status, [d.agent_id]: d.status } });
         break;
 
+      case "agent.thought": {
+        const t = d as AgentThoughtPayload;
+        const th: AgentThought = { agentId: t.agent_id, name: t.name, phase: t.phase, thought: t.thought, ts: now() };
+        const byCtx = [...(get().thoughtsByCtx[t.context_id] || []), th].slice(-60);
+        const byAgent = [th, ...(get().thoughtsByAgent[t.agent_id] || [])].slice(0, 12);
+        set({
+          thoughtsByCtx: { ...get().thoughtsByCtx, [t.context_id]: byCtx },
+          thoughtsByAgent: { ...get().thoughtsByAgent, [t.agent_id]: byAgent },
+        });
+        touch(t.context_id);
+        break;
+      }
+
       case "prompt.accepted": {
         const isCron = String(d.context_id).startsWith("cron-");
         set({
@@ -251,6 +270,7 @@ export const useStore = create<State>((set, get) => ({
           mode: m.mode,
           role: m.role,
           text: m.text,
+          method: m.method,
           intent: m.intent,
           threadId: m.thread_id,
           groupId: m.group_id,

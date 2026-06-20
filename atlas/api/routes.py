@@ -12,6 +12,7 @@ import asyncio
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from sse_starlette.sse import EventSourceResponse
 
+from atlas.a2a.methods import A2A_METHOD_CATALOG
 from atlas.api.projects import build_project_view, list_projects
 from atlas.api.viewmodels import agent_card_view, build_org_view, thread_view
 from atlas.config import get_settings
@@ -58,6 +59,12 @@ def users(request: Request):
         "count": len(rt.snapshot.users),
         "users": [u.model_dump(mode="json") for u in rt.snapshot.users.values()],
     }
+@router.get("/a2a/methods")
+def a2a_methods():
+    """The A2A protocol methods Atlas implements + where each is exercised."""
+    return {"methods": list(A2A_METHOD_CATALOG)}
+
+
 @router.get("/projects")
 def projects(request: Request):
     """All projects with a compact summary (members / departments / secrets)."""

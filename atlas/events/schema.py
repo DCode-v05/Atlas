@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 class EventType(str, Enum):
     AGENT_STATUS = "agent.status"
+    AGENT_THOUGHT = "agent.thought"  # an agent's private reasoning while it thinks
     PROMPT_ACCEPTED = "prompt.accepted"
     GATE_REJECTED = "gate.rejected"
     DISCOVERY_MATCHED = "discovery.matched"
@@ -81,6 +82,20 @@ class AgentStatusPayload(BaseModel):
     department: str = ""
 
 
+class AgentThoughtPayload(BaseModel):
+    """What an agent is privately thinking at a step of the pipeline.
+
+    This is the agent's *internal reasoning trace* — separate from the messages
+    it sends to others — surfaced so the UI can show "what they're thinking".
+    """
+
+    agent_id: str
+    name: str = ""
+    context_id: str
+    phase: str = "reasoning"  # plan | discover | policy | coordinate | reasoning
+    thought: str
+
+
 class PromptAcceptedPayload(BaseModel):
     prompt: str
     task_id: str
@@ -133,6 +148,7 @@ class MessageSentPayload(BaseModel):
     mode: str  # individual | group
     role: str  # user | agent
     text: str
+    method: str = "message/send"  # the A2A method this hop exercises
     intent: Optional[IntentView] = None
     thread_id: Optional[str] = None
     group_id: Optional[str] = None

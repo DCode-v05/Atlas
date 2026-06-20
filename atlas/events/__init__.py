@@ -4,6 +4,7 @@ from atlas.events.broker import EventBroker
 from atlas.events.schema import (
     ALL_EVENT_TYPES,
     AgentStatusPayload,
+    AgentThoughtPayload,
     CandidateView,
     ContextSharePayload,
     CronStatePayload,
@@ -32,6 +33,7 @@ __all__ = [
     "CandidateView",
     "IntentView",
     "AgentStatusPayload",
+    "AgentThoughtPayload",
     "PromptAcceptedPayload",
     "GateRejectedPayload",
     "DiscoveryMatchedPayload",

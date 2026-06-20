@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Optional
 
 from atlas.a2a.extensions import NEED_TO_KNOW_EXT
+from atlas.a2a.methods import A2AMethod
 from atlas.a2a.models import Message, Task, TaskState, TaskStatus
 from atlas.bus.discovery import Discovery, tokenize
 from atlas.bus.registry import AgentRegistry
@@ -217,6 +218,7 @@ class Router:
                 mode=mode.value,
                 role=role,
                 text=text,
+                method=A2AMethod.MESSAGE_SEND.value,
                 intent=intent_view,
                 thread_id=thread_id,
                 group_id=group_id,

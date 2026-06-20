@@ -112,6 +112,21 @@ async def test_user_prompt_routes_and_completes(rt):
     assert "metrics.updated" in types
 
 
+async def test_messages_carry_a2a_method_and_agents_emit_thoughts(rt):
+    res = await rt.orchestrator.run_user_prompt("refactor the event pipeline — share the Atlas Core architecture decision record")
+    assert res["rejected"] is False
+    await _drain_until_completed(rt, res["context_id"], resolve_hitl=(True, ShareOutcome.SHARE))
+    evs = rt.broker.recent(10_000)
+    # every agent→agent hop is labelled with its A2A method
+    sends = [e for e in evs if e.event == "message.sent"]
+    assert sends and all(e.data.get("method") == "message/send" for e in sends)
+    # agents surface a private reasoning trace (separate from their messages)
+    thoughts = [e for e in evs if e.event == "agent.thought"]
+    assert thoughts, "expected agent.thought events"
+    assert all(t.data.get("thought") for t in thoughts)
+    assert {t.data["phase"] for t in thoughts} & {"plan", "discover", "policy", "coordinate"}
+
+
 async def test_secret_request_escalates_and_resumes_on_approval(rt):
     eng = _billing_engineer(rt)
     cid = rt.orchestrator.run_cron_task(eng, "I need the billing stripe payment credentials to wire the integration")

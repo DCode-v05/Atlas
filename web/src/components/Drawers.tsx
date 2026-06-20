@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Lock, Users, X } from "lucide-react";
+import { BrainCircuit, Lock, Users, X } from "lucide-react";
 import { api } from "../api";
 import type { AgentCardView } from "../types";
 import { LEVEL_LABEL, deptColor } from "../theme";
@@ -115,6 +115,7 @@ export function AgentCardDrawer() {
   const node = agents[id];
   const color = deptColor(node?.department ?? "");
   const nameOf = (x?: string | null) => (x ? agents[x]?.name ?? x : "—");
+  const thoughts = useStore((s) => (id ? s.thoughtsByAgent[id] : undefined)) ?? [];
 
   return (
     <Drawer title="Agent Card" idx="◆" onClose={close} accent={color}>
@@ -138,6 +139,19 @@ export function AgentCardDrawer() {
         {(card?.goal ?? node?.goal) && (
           <Section label="Goal · responsibility">
             <div className="text-[12px] text-ink leading-snug">{card?.goal ?? node?.goal}</div>
+          </Section>
+        )}
+
+        {thoughts.length > 0 && (
+          <Section label="What they're thinking · recent">
+            <div className="flex flex-col gap-1.5">
+              {thoughts.slice(0, 6).map((t, i) => (
+                <div key={i} className="flex items-start gap-1.5 rounded-sm px-2 py-1.5" style={{ background: "var(--inset)" }}>
+                  <BrainCircuit size={11} className="shrink-0 mt-0.5" style={{ color }} />
+                  <span className="text-[10.5px] italic leading-snug" style={{ color: "var(--text-2)" }}>“{t.thought}”</span>
+                </div>
+              ))}
+            </div>
           </Section>
         )}
 

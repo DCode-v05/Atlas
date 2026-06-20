@@ -1,5 +1,6 @@
-import { ArrowRight, Bot, Check, EyeOff, Radio, ShieldAlert, Sparkles, Users, X } from "lucide-react";
-import type { ChatMessage, HitlItem } from "../types";
+import { useEffect, useState } from "react";
+import { ArrowRight, Bot, BrainCircuit, Check, EyeOff, Network, Radio, ShieldAlert, Sparkles, Users, X } from "lucide-react";
+import type { A2AMethodInfo, AgentThought, ChatMessage, HitlItem } from "../types";
 import type { Decision } from "../store";
 import { DEPARTMENT_LABEL, deptColor } from "../theme";
 import { api } from "../api";
@@ -25,6 +26,7 @@ export function ConversationTimeline() {
         <Radio size={13} className={cron.running ? "animate-flicker" : ""} style={{ color: cron.running ? "var(--gold)" : "var(--ok)" }} />
         <span className="eyebrow">Live conversations</span>
         {cron.running && <span className="mono text-[9.5px]" style={{ color: "var(--gold)" }}>· simulation on · new goal {cron.remaining.toFixed(0)}s</span>}
+        <A2AMethodsLegend />
       </div>
       <div className="flex flex-col gap-2.5">
         {order.map((cid) => <ConversationCard key={cid} cid={cid} />)}
@@ -33,10 +35,48 @@ export function ConversationTimeline() {
   );
 }
 
+/** Small reference explaining the A2A protocol methods behind every hop. */
+function A2AMethodsLegend() {
+  const [open, setOpen] = useState(false);
+  const [methods, setMethods] = useState<A2AMethodInfo[]>([]);
+  useEffect(() => {
+    if (open && methods.length === 0) api.a2aMethods().then((r) => setMethods(r.methods)).catch(console.error);
+  }, [open]);
+  return (
+    <div className="ml-auto relative">
+      <button onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-1 mono text-[9px] px-1.5 py-0.5 rounded transition-colors"
+        style={{ color: open ? "#fff" : "var(--accent)", background: open ? "var(--accent)" : "var(--accent-soft)" }}>
+        <Network size={10} /> A2A methods
+      </button>
+      {open && (
+        <div className="absolute right-0 top-6 z-30 w-[330px] rounded-md p-2.5 flex flex-col gap-1.5"
+          style={{ background: "var(--surface-2)", border: "1px solid var(--border)", boxShadow: "0 12px 30px -12px rgba(0,0,0,0.5)" }}>
+          <div className="eyebrow pb-0.5">A2A protocol methods · how Atlas uses each</div>
+          {methods.map((m) => (
+            <div key={m.method} className="rounded-sm px-2 py-1.5" style={{ background: "var(--inset)" }}>
+              <div className="flex items-center gap-1.5">
+                <span className="mono text-[10px] font-bold text-ink">{m.method}</span>
+                <span className="mono text-[8px] px-1 rounded-sm" style={{
+                  color: m.active === "yes" ? "var(--ok)" : "var(--faint)",
+                  background: m.active === "yes" ? "rgba(46,160,67,0.12)" : "var(--surface)",
+                }}>{m.active === "yes" ? "active" : "spec"}</span>
+              </div>
+              <div className="text-[10px] text-muted mt-0.5">{m.summary}</div>
+              <div className="text-[9px] text-faint mt-0.5">↳ {m.atlas}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ConversationCard({ cid }: { cid: string }) {
   const ctx = useStore((s) => s.contexts[cid]);
   const messages = useStore((s) => s.messagesByCtx[cid]) ?? [];
   const decisions = useStore((s) => s.decisionsByCtx[cid]) ?? [];
+  const thoughts = useStore((s) => s.thoughtsByCtx[cid]) ?? [];
   const agents = useStore((s) => s.agents);
   const selectContext = useStore((s) => s.selectContext);
   // NOTE: select the stable array and filter in render — returning a freshly
@@ -48,14 +88,15 @@ function ConversationCard({ cid }: { cid: string }) {
   const isGroup = messages.some((m) => m.mode === "group");
   const isCron = ctx?.kind === "cron";
 
-  type Row = { ts: number; m?: ChatMessage; d?: Decision };
+  type Row = { ts: number; m?: ChatMessage; d?: Decision; t?: AgentThought };
   const rows: Row[] = [
     ...messages.map((m) => ({ ts: m.ts, m })),
     ...decisions.filter((d) => d.kind !== "reused").map((d) => ({ ts: d.ts, d })),
+    ...thoughts.map((t) => ({ ts: t.ts, t })),
   ].sort((a, b) => a.ts - b.ts);
   // Show enough to keep a full group thread legible (opening + member replies +
   // the need-to-know exchange ≈ 14); longer threads collapse behind the drawer.
-  const CAP = 15;
+  const CAP = 20;
   const shown = rows.slice(-CAP);
   const hidden = rows.length - shown.length;
 
@@ -99,7 +140,9 @@ function ConversationCard({ cid }: { cid: string }) {
           <button onClick={() => selectContext(cid)} className="text-[10px] mono text-faint hover:text-accent self-center">+{hidden} earlier — open full thread</button>
         )}
         {shown.map((r, i) =>
-          r.m ? <MsgRow key={i} m={r.m} agents={agents} nameOf={nameOf} /> : <DecisionRow key={i} d={r.d!} nameOf={nameOf} />,
+          r.m ? <MsgRow key={i} m={r.m} agents={agents} nameOf={nameOf} />
+          : r.t ? <ThoughtRow key={i} t={r.t} agents={agents} />
+          : <DecisionRow key={i} d={r.d!} nameOf={nameOf} />,
         )}
         {shown.length === 0 && <div className="text-[11px] text-faint py-1">opening…</div>}
         {pending.map((h) => <InlineApproval key={h.request_id} h={h} nameOf={nameOf} />)}
@@ -170,8 +213,36 @@ function MsgRow({ m, agents, nameOf }: { m: ChatMessage; agents: any; nameOf: (i
         <ArrowRight size={11} className="text-faint shrink-0" />
         <span className="text-[10.5px] text-muted truncate max-w-[150px]">{recip}</span>
         {m.intent && <IntentChip tag={m.intent.purpose_tag} compact />}
+        {m.method && (
+          <span className="ml-auto inline-flex items-center gap-1 mono text-[8.5px] px-1.5 py-0.5 rounded shrink-0"
+            title="A2A protocol method for this hop"
+            style={{ color: "var(--accent)", background: "var(--accent-soft)" }}>
+            <Network size={9} /> {m.method}
+          </span>
+        )}
       </div>
       <div className="text-[11.5px] leading-snug" style={{ color: "var(--text-2)" }}>{m.text}</div>
+    </div>
+  );
+}
+
+const PHASE_LABEL: Record<string, string> = {
+  plan: "planning", discover: "discovering", policy: "weighing need-to-know",
+  coordinate: "coordinating", reasoning: "thinking",
+};
+
+function ThoughtRow({ t, agents }: { t: AgentThought; agents: any }) {
+  const dept = agents[t.agentId]?.department;
+  const c = dept ? deptColor(dept) : "var(--muted)";
+  return (
+    <div className="flex items-start gap-1.5 px-2.5 py-1 rounded-md italic"
+      style={{ background: "transparent", borderLeft: `2px dashed ${c}66` }}>
+      <BrainCircuit size={11} className="shrink-0 mt-0.5" style={{ color: c }} />
+      <span className="text-[10.5px] leading-snug" style={{ color: "var(--muted)" }}>
+        <span className="font-semibold not-italic" style={{ color: "var(--text-2)" }}>{t.name}</span>
+        <span className="mono text-[8px] not-italic px-1 ml-1 rounded-sm" style={{ background: "var(--inset)", color: "var(--faint)" }}>{PHASE_LABEL[t.phase] ?? t.phase}</span>
+        <span className="ml-1">“{t.thought}”</span>
+      </span>
     </div>
   );
 }

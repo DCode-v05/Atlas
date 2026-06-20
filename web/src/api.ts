@@ -1,4 +1,4 @@
-import type { AgentCardView, OrgView, ProjectSummary, ProjectView } from "./types";
+import type { A2AMethodInfo, AgentCardView, OrgView, ProjectSummary, ProjectView } from "./types";
 
 const BASE = "/api";
 
@@ -23,6 +23,7 @@ export const api = {
   thread: (cid: string) => j(`/threads/${cid}`),
   projects: () => j<{ count: number; projects: ProjectSummary[] }>("/projects"),
   project: (id: string) => j<ProjectView>(`/projects/${id}`),
+  a2aMethods: () => j<{ methods: A2AMethodInfo[] }>("/a2a/methods"),
   prompt: (prompt: string, human = "Operator") => j("/prompt", jsonPost({ prompt, human })),
   cron: (on: boolean) => j("/cron", jsonPost({ on })),
   approve: (id: string, outcome: "share" | "redact" = "share") =>

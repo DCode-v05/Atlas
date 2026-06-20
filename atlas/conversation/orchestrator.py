@@ -27,6 +27,7 @@ from atlas.bus.router import GATE_REASON, Router
 from atlas.conversation.intent import build_request_intent, coordination_intent
 from atlas.conversation.stores import GroupStore, ThreadStore
 from atlas.events import (
+    AgentThoughtPayload,
     ContextSharePayload,
     EventBroker,
     EventType,
@@ -89,6 +90,21 @@ class Orchestrator:
         self.cron_max_inflight = cron_max_inflight
         self._cron_active = 0
         self._bg: set[asyncio.Task] = set()
+
+    def _think(self, agent_id: str, context_id: str, thought: str, phase: str = "reasoning") -> None:
+        """Surface an agent's private reasoning trace (separate from its messages).
+
+        Grounded in the real pipeline state at this step — what the agent needs,
+        who it's about to ask, what it's weighing — so the UI can show *what
+        they're thinking*, not a fabricated chat message."""
+        self.broker.emit(
+            EventType.AGENT_THOUGHT,
+            AgentThoughtPayload(
+                agent_id=agent_id, name=self.registry.get(agent_id).name,
+                context_id=context_id, phase=phase, thought=thought,
+            ),
+            context_id=context_id,
+        )
 
     # ── public entry points ────────────────────────────────────────────────
     def _org_summary(self) -> str:
@@ -188,6 +204,9 @@ class Orchestrator:
         try:
             self.metrics.record_hop(context_id, agent_id)
             self.router.set_status(agent_id, AgentStatus.THINKING)
+            self._think(agent_id, context_id,
+                        f"This is mine to handle — {agent.profile.goal or agent.profile.role_title}. "
+                        f"Working out what context I need.", phase="plan")
             self.router.set_task_state(task, TaskState.WORKING)
             await self._pause()
 
@@ -195,10 +214,15 @@ class Orchestrator:
             grouped = self._should_group(agent, prompt)
 
             if grouped:
+                self._think(agent_id, context_id,
+                            "This needs the whole team — I'll open a group to coordinate.", phase="coordinate")
                 await self._run_group(agent, prompt, context_id, task_id)
 
             if needs:
                 topic = needs[0][0].title
+                self._think(agent_id, context_id,
+                            "I need " + ", ".join(f"'{it.title}'" for it, _ in needs)
+                            + " — finding who owns it and asking with my reason.", phase="discover")
                 scored2 = [(it.owner_agent_id, float(rel)) for it, rel in needs]
                 self.router.emit_discovery(
                     level=2, query=topic, scored=scored2, chosen=None, requester=agent_id, context_id=context_id
@@ -290,6 +314,9 @@ class Orchestrator:
                 self.router.announce_thread(thread)
 
             self.router.set_status(owner.id, AgentStatus.THINKING)
+            self._think(owner.id, context_id,
+                        f"{agent.name} wants '{item.title}' ({item.sensitivity.value}). "
+                        f"Do they have a need to know? Weighing scope, clearance and intent.", phase="policy")
             await self._pause()
             msg = await self._send_say(
                 "request",

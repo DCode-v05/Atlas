@@ -32,6 +32,13 @@ export interface AgentStatusPayload {
   role: string;
   department: string;
 }
+export interface AgentThoughtPayload {
+  agent_id: string;
+  name: string;
+  context_id: string;
+  phase: string; // plan | discover | policy | coordinate | reasoning
+  thought: string;
+}
 export interface PromptAcceptedPayload {
   prompt: string;
   task_id: string;
@@ -78,6 +85,7 @@ export interface MessageSentPayload {
   mode: "individual" | "group";
   role: "user" | "agent";
   text: string;
+  method?: string;
   intent?: IntentView | null;
   thread_id?: string | null;
   group_id?: string | null;
@@ -144,6 +152,7 @@ export interface LlmStatusPayload {
 
 export const KNOWN_EVENTS = new Set<string>([
   "agent.status",
+  "agent.thought",
   "prompt.accepted",
   "gate.rejected",
   "discovery.matched",
@@ -272,10 +281,24 @@ export interface ChatMessage {
   mode: "individual" | "group";
   role: string;
   text: string;
+  method?: string;
   intent?: IntentView | null;
   threadId?: string | null;
   groupId?: string | null;
   ts: number;
+}
+export interface AgentThought {
+  agentId: string;
+  name: string;
+  phase: string;
+  thought: string;
+  ts: number;
+}
+export interface A2AMethodInfo {
+  method: string;
+  summary: string;
+  atlas: string;
+  active: string;
 }
 export interface FeedItem {
   id: number;

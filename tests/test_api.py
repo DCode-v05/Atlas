@@ -70,6 +70,15 @@ async def test_prompt_attributed_to_user(client):
         assert data["submitted_by"]["user_id"] == "user-AGT-050"
         assert data["submitted_by"]["agent_id"] == "AGT-050"
     assert (await c.post("/api/prompt", json={"prompt": "hi", "user_id": "nope"})).status_code == 404
+async def test_a2a_methods_endpoint(client):
+    c, _ = client
+    data = (await c.get("/api/a2a/methods")).json()
+    methods = {m["method"]: m for m in data["methods"]}
+    assert "message/send" in methods and methods["message/send"]["active"] == "yes"
+    assert "tasks/get" in methods and "agent/card" in methods
+    assert all(m["summary"] and m["atlas"] for m in data["methods"])
+
+
 async def test_projects_list_endpoint(client):
     c, _ = client
     data = (await c.get("/api/projects")).json()
