@@ -59,6 +59,7 @@ class OrgSnapshot:
     user_of_agent: dict[str, str]  # agent_id -> user_id
     org_lexicon: frozenset[str]
     ceo_id: str
+    policy_officer_id: str = ""  # the Security head — independent compliance reviewer
 
     # convenience accessors -------------------------------------------------
     def head_of(self, dept: Department) -> str:
@@ -318,4 +319,5 @@ def generate_org(seed: int) -> OrgSnapshot:
         user_of_agent=user_of_agent,
         org_lexicon=frozenset(lexicon),
         ceo_id=ceo_id,
+        policy_officer_id=heads.get(Department.SECURITY, ceo_id),
     )

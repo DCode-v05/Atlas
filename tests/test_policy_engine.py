@@ -220,3 +220,56 @@ def test_llm_can_tighten_but_never_loosen():
     base_esc = _finalize(it, ESCALATE, "R-exact_weak", "base")
     same = tighten_only(base_esc, SHARE, "model tried to loosen", it)
     assert same.outcome == ESCALATE and same.rule_id == "R-exact_weak"
+
+
+# ─── Policy Officer review (independent compliance second opinion) ─────────────
+
+
+def test_policy_officer_tightens_an_over_permissive_owner_decision():
+    from atlas.policy import review_decision
+
+    # A confidential item, requester is out-of-scope + under-cleared → policy floor = DENY.
+    it = item(Sensitivity.CONFIDENTIAL, Scope.PROJECT, ref="billing", min_clr=3)
+    requester = prof("R", Department.SALES, Level.IC)  # clearance 1, not on billing
+    over_permissive = _finalize(it, SHARE, "owner-LLM", "owner chose to share")
+
+    final, intervened, floor = review_decision(over_permissive, requester, OWNER, it, intent(PurposeTag.SOCIAL, Scope.ORG))
+    assert intervened is True
+    assert final.outcome == DENY  # tightened to the policy floor
+    assert floor.outcome == DENY
+    assert final.rule_id.endswith("+POLICY")
+
+
+def test_policy_officer_upholds_a_compliant_owner_decision():
+    from atlas.policy import review_decision
+
+    it = item(Sensitivity.INTERNAL, Scope.ORG)
+    requester = prof("R", Department.ENGINEERING, Level.MANAGER, clearance=3)
+    owner_dec = _finalize(it, SHARE, "I-exact_legit", "owner shared")
+    final, intervened, _ = review_decision(owner_dec, requester, OWNER, it, intent(PurposeTag.TASK_CONTEXT, Scope.ORG))
+    assert intervened is False
+    assert final.outcome == SHARE  # already policy-consistent → unchanged
+
+
+def test_policy_officer_never_loosens_a_strict_owner_decision():
+    from atlas.policy import review_decision
+
+    # Owner already DENIED; the floor for this in-scope legit request would be SHARE,
+    # but review is tighten-only and must NOT loosen DENY → SHARE.
+    it = item(Sensitivity.INTERNAL, Scope.ORG)
+    requester = prof("R", Department.ENGINEERING, Level.MANAGER, clearance=3)
+    owner_dec = _finalize(it, DENY, "owner-LLM", "owner refused")
+    final, intervened, _ = review_decision(owner_dec, requester, OWNER, it, intent(PurposeTag.TASK_CONTEXT, Scope.ORG))
+    assert intervened is False
+    assert final.outcome == DENY  # never loosened
+
+
+def test_policy_officer_respects_secret_cap():
+    from atlas.policy import review_decision
+
+    it = item(Sensitivity.SECRET, Scope.ORG)
+    requester = prof("R", Department.ENGINEERING, Level.IC)
+    over_permissive = _finalize(it, SHARE, "owner-LLM", "owner tried to share a secret")
+    final, intervened, _ = review_decision(over_permissive, requester, OWNER, it, intent(PurposeTag.TASK_CONTEXT, Scope.ORG))
+    assert intervened is True
+    assert final.outcome == ESCALATE  # SECRET never shared without human approval

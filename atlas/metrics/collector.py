@@ -86,6 +86,18 @@ class MetricsCollector:
         self.ctx(context_id).redundant_contacts_avoided += 1
         self.totals.redundant_contacts_avoided += 1
 
+    def record_policy_review(self, context_id: str, intervened: bool) -> None:
+        """The Policy Officer reviewed a share decision (and maybe tightened it)."""
+        m = self.ctx(context_id)
+        m.policy_reviews += 1
+        self.totals.policy_reviews += 1
+        if intervened:
+            m.policy_tightened += 1
+            self.totals.policy_tightened += 1
+        else:
+            m.policy_upheld += 1
+            self.totals.policy_upheld += 1
+
     # emit -----------------------------------------------------------------
     def emit(self, context_id: str | None = None) -> None:
         m = self.per_context.get(context_id) if context_id else None

@@ -29,6 +29,7 @@ class EventType(str, Enum):
     CONTEXT_REDACTED = "context.redacted"
     CONTEXT_DENIED = "context.denied"
     CONTEXT_REUSED = "context.reused"  # redundant contact avoided
+    POLICY_REVIEW = "policy.review"  # Policy Officer reviewed an owner's share decision
     HITL_REQUESTED = "hitl.requested"
     HITL_RESOLVED = "hitl.resolved"
     METRICS_UPDATED = "metrics.updated"
@@ -166,6 +167,24 @@ class ContextSharePayload(BaseModel):
     rule_id: str
     reason: str
     summary: Optional[str] = None  # set on redact
+
+
+class PolicyReviewPayload(BaseModel):
+    """The Policy Officer's independent compliance review of a share decision."""
+
+    context_id: str
+    officer: str
+    officer_name: str = ""
+    requester: str
+    owner: str
+    item_id: str
+    title: str
+    sensitivity: str
+    owner_outcome: str   # what the owner agent decided
+    final_outcome: str   # after compliance review (tighten-only)
+    intervened: bool     # True if the officer tightened the owner's decision
+    rationale: str
+    rule_id: str = ""
 
 
 class HitlRequestedPayload(BaseModel):

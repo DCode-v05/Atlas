@@ -31,6 +31,7 @@ from atlas.events import (
     EventBroker,
     EventType,
     MessageSentPayload,
+    PolicyReviewPayload,
     PromptAcceptedPayload,
 )
 from atlas.hitl.queue import HitlQueue
@@ -46,7 +47,7 @@ from atlas.org.ext_models import (
     ShareOutcome,
 )
 from atlas.org.generator import OrgSnapshot
-from atlas.policy import evaluate_share
+from atlas.policy import evaluate_share, review_decision, tighten_only
 
 USER_NODE = "operator"
 
@@ -681,6 +682,7 @@ class Orchestrator:
         OWN data — its own judgement, no rule matrix. The deterministic policy is kept
         ONLY as a safe offline net for when the LLM is unreachable (marked live=False)."""
         decide = getattr(self.llm, "decide_share", None)
+        owner_decision = None
         if self.llm.available and decide is not None:
             try:
                 res = await decide(requester=requester.profile, owner=owner.profile, item=item, intent=intent)
@@ -690,12 +692,63 @@ class Orchestrator:
                 outcome, reason = res
                 self._trace(owner.id, "decide_share", f"{outcome.value.upper()} '{item.title}'",
                             live=True, context_id=context_id, detail=reason)
-                return _build_llm_decision(item, outcome, reason)
-        # offline fallback: the deterministic policy matrix (only when the LLM is down)
-        decision = evaluate_share(requester.profile, owner.profile, item, intent, requester_manages_owner=manages)
-        self._trace(owner.id, "decide_share", f"{decision.outcome.value.upper()} '{item.title}' (offline fallback)",
-                    live=False, context_id=context_id, detail=decision.reason)
-        return decision
+                owner_decision = _build_llm_decision(item, outcome, reason)
+        if owner_decision is None:
+            # offline fallback: the deterministic policy matrix (only when the LLM is down)
+            owner_decision = evaluate_share(requester.profile, owner.profile, item, intent, requester_manages_owner=manages)
+            self._trace(owner.id, "decide_share", f"{owner_decision.outcome.value.upper()} '{item.title}' (offline fallback)",
+                        live=False, context_id=context_id, detail=owner_decision.reason)
+        # Independent compliance review by the Policy Officer (tighten-only).
+        return await self._policy_review(owner_decision, requester, owner, item, intent, context_id, manages)
+
+    async def _policy_review(self, owner_decision, requester: OrgAgent, owner: OrgAgent, item: ContextItem,
+                             intent: Intent, context_id: str, manages: bool):
+        """The Policy Officer (an independent compliance agent — the Security head)
+        reviews the owner's share decision against the need-to-know floor, like a
+        human compliance officer. It may only TIGHTEN (catch an over-share); the
+        rule matrix + SECRET cap are the hard floor. Metered + emitted for the UI."""
+        final, intervened, _floor = review_decision(
+            owner_decision, requester.profile, owner.profile, item, intent, requester_manages_owner=manages
+        )
+        rationale = final.reason if intervened else \
+            f"Upheld {owner_decision.outcome.value}: consistent with {item.sensitivity.value} need-to-know."
+
+        # Optional human-like LLM compliance judgement, tighten-only on top of the floor.
+        reviewer = getattr(self.llm, "review_policy", None)
+        live = False
+        if self.llm.available and reviewer is not None:
+            live = True
+            try:
+                res = await reviewer(requester=requester.profile, owner=owner.profile,
+                                     item=item, intent=intent, current=final.outcome)
+            except Exception:
+                res = None
+            if res is not None:
+                llm_outcome, llm_reason = res
+                tightened = tighten_only(final, llm_outcome, f"Compliance officer: {llm_reason}", item)
+                if tightened.outcome != final.outcome:
+                    final, intervened, rationale = tightened, True, tightened.reason
+
+        officer_id = self.snapshot.policy_officer_id or self.snapshot.ceo_id
+        officer = self.registry.get(officer_id)
+        self.metrics.record_policy_review(context_id, intervened)
+        self._trace(
+            officer_id, "policy_review",
+            f"{'TIGHTENED' if intervened else 'upheld'} {owner_decision.outcome.value}→{final.outcome.value} '{item.title}'",
+            live=live, context_id=context_id, detail=rationale,
+        )
+        self.broker.emit(
+            EventType.POLICY_REVIEW,
+            PolicyReviewPayload(
+                context_id=context_id, officer=officer_id, officer_name=officer.name,
+                requester=requester.id, owner=owner.id, item_id=item.item_id, title=item.title,
+                sensitivity=item.sensitivity.value, owner_outcome=owner_decision.outcome.value,
+                final_outcome=final.outcome.value, intervened=intervened, rationale=rationale,
+                rule_id=final.rule_id,
+            ),
+            context_id=context_id,
+        )
+        return final
 
     def _blurb(self, aid: str) -> str:
         ag = self.registry.get(aid)

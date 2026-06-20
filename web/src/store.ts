@@ -11,6 +11,7 @@ import type {
   LlmStatusPayload,
   MessageSentPayload,
   OrgView,
+  PolicyReviewPayload,
   ThreadCreatedPayload,
   TraceSpanPayload,
 } from "./types";
@@ -48,6 +49,7 @@ interface State {
   links: LiveLink[];
   messagesByCtx: Record<string, ChatMessage[]>;
   decisionsByCtx: Record<string, Decision[]>;
+  policyByCtx: Record<string, (PolicyReviewPayload & { ts: number })[]>;
   tracesByCtx: Record<string, TraceSpanPayload[]>;
   threads: Record<string, ThreadCreatedPayload>;
   groups: Record<string, GroupFormedPayload>;
@@ -91,6 +93,7 @@ export const useStore = create<State>((set, get) => ({
   links: [],
   messagesByCtx: {},
   decisionsByCtx: {},
+  policyByCtx: {},
   tracesByCtx: {},
   threads: {},
   groups: {},
@@ -283,6 +286,15 @@ export const useStore = create<State>((set, get) => ({
         upsertLink(c.sender, c.recipient, { outcome });
         const tone = kind === "shared" ? "ok" : kind === "redacted" ? "warn" : kind === "denied" ? "danger" : "info";
         pushFeed(`${cap(kind)} · ${c.title}`, tone);
+        break;
+      }
+
+      case "policy.review": {
+        const p = d as PolicyReviewPayload;
+        const list = [...(get().policyByCtx[p.context_id] || []), { ...p, ts: now() }].slice(-80);
+        set({ policyByCtx: { ...get().policyByCtx, [p.context_id]: list } });
+        touch(p.context_id);
+        if (p.intervened) pushFeed(`Policy Officer tightened ${p.owner_outcome}→${p.final_outcome} · ${p.title}`, "danger");
         break;
       }
 

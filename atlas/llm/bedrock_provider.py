@@ -493,3 +493,46 @@ class BedrockProvider(LLMProvider):
         rm = re.search(r"reason\s*[:=]\s*(.+)", text, re.IGNORECASE)
         reason = (rm.group(1).strip() if rm else text.strip())[:240]
         return outcome, reason
+
+    async def review_policy(
+        self,
+        *,
+        requester: OrgProfile,
+        owner: OrgProfile,
+        item: ContextItem,
+        intent: Intent,
+        current: ShareOutcome,
+    ) -> Optional[tuple[ShareOutcome, str]]:
+        """The Policy Officer's independent, human-like compliance review of a share.
+
+        Acts as a security/compliance reviewer giving a second opinion. It may only
+        recommend the SAME outcome or a STRICTER one (the caller enforces tighten-only)
+        — never looser. Returns (outcome, reason) or None to defer to the rule floor."""
+        system = (
+            "You are the company's Compliance & Security Officer reviewing whether a colleague's "
+            "share of internal data respects need-to-know. You give an INDEPENDENT second opinion: "
+            "you may UPHOLD the proposed outcome or make it STRICTER, never more permissive. "
+            "Outcomes, least→most strict: share < redact < escalate < deny.\n"
+            "Reply on two lines:\nOUTCOME: <share|redact|escalate|deny>\nREASON: <one short sentence>"
+        )
+        user = (
+            f"Proposed outcome by the data owner: {current.value}.\n"
+            f"Data: '{item.title}' — sensitivity={item.sensitivity.value}, scope={item.scope.value}"
+            f"{('/' + item.scope_ref) if item.scope_ref else ''}, min_clearance={item.min_clearance}.\n"
+            f"Requester: {requester.role_title} in {requester.department.value} "
+            f"(clearance {requester.clearance}, teams={requester.teams}, projects={requester.projects}).\n"
+            f"Stated reason: purpose={intent.purpose_tag.value}, declared_scope={intent.declared_scope.value}, "
+            f'motivation="{intent.motivation}".\n'
+            f"Do you uphold {current.value}, or tighten it?"
+        )
+        text = await self._chat(self.reasoning_model, system, user, max_tokens=80, temperature=0.0)
+        if not text:
+            return None
+        low = text.lower()
+        m = re.search(r"outcome\s*[:=]\s*(share|redact|escalate|deny)", low)
+        outcome = _OUTCOME_WORDS[m.group(1)] if m else None
+        if outcome is None:
+            return None
+        rm = re.search(r"reason\s*[:=]\s*(.+)", text, re.IGNORECASE)
+        reason = (rm.group(1).strip() if rm else text.strip())[:240]
+        return outcome, reason

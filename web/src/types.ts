@@ -104,6 +104,21 @@ export interface ContextSharePayload {
   reason: string;
   summary?: string | null;
 }
+export interface PolicyReviewPayload {
+  context_id: string;
+  officer: string;
+  officer_name: string;
+  requester: string;
+  owner: string;
+  item_id: string;
+  title: string;
+  sensitivity: string;
+  owner_outcome: string;
+  final_outcome: string;
+  intervened: boolean;
+  rationale: string;
+  rule_id: string;
+}
 export interface HitlRequestedPayload {
   request_id: string;
   task_id: string;
@@ -166,6 +181,7 @@ export const KNOWN_EVENTS = new Set<string>([
   "context.redacted",
   "context.denied",
   "context.reused",
+  "policy.review",
   "hitl.requested",
   "hitl.resolved",
   "metrics.updated",

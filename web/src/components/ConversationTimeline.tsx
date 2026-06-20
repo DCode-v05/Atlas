@@ -1,5 +1,5 @@
-import { ArrowRight, Bot, Check, EyeOff, Radio, ShieldAlert, Sparkles, Users, X } from "lucide-react";
-import type { ChatMessage, HitlItem } from "../types";
+import { ArrowRight, Bot, Check, EyeOff, Radio, ShieldAlert, ShieldCheck, Sparkles, Users, X } from "lucide-react";
+import type { ChatMessage, HitlItem, PolicyReviewPayload } from "../types";
 import type { Decision } from "../store";
 import { DEPARTMENT_LABEL, deptColor } from "../theme";
 import { api } from "../api";
@@ -45,6 +45,7 @@ function ConversationCard({ cid }: { cid: string }) {
   const ctx = useStore((s) => s.contexts[cid]);
   const messages = useStore((s) => s.messagesByCtx[cid]) ?? [];
   const decisions = useStore((s) => s.decisionsByCtx[cid]) ?? [];
+  const policy = useStore((s) => s.policyByCtx[cid]) ?? [];
   const agents = useStore((s) => s.agents);
   const selectContext = useStore((s) => s.selectContext);
   // NOTE: select the stable array and filter in render — returning a freshly
@@ -56,10 +57,12 @@ function ConversationCard({ cid }: { cid: string }) {
   const isGroup = messages.some((m) => m.mode === "group");
   const isCron = ctx?.kind === "cron";
 
-  type Row = { ts: number; m?: ChatMessage; d?: Decision };
+  type Row = { ts: number; m?: ChatMessage; d?: Decision; p?: PolicyReviewPayload & { ts: number } };
   const rows: Row[] = [
     ...messages.map((m) => ({ ts: m.ts, m })),
     ...decisions.filter((d) => d.kind !== "reused").map((d) => ({ ts: d.ts, d })),
+    // only show the Policy Officer when it actually intervened (caught an over-share)
+    ...policy.filter((p) => p.intervened).map((p) => ({ ts: p.ts, p })),
   ].sort((a, b) => a.ts - b.ts);
   // Show enough to keep a full group thread legible (opening + member replies +
   // the need-to-know exchange ≈ 14); longer threads collapse behind the drawer.
@@ -107,7 +110,9 @@ function ConversationCard({ cid }: { cid: string }) {
           <button onClick={() => selectContext(cid)} className="text-[10px] mono text-faint hover:text-accent self-center">+{hidden} earlier — open full thread</button>
         )}
         {shown.map((r, i) =>
-          r.m ? <MsgRow key={i} m={r.m} agents={agents} nameOf={nameOf} /> : <DecisionRow key={i} d={r.d!} nameOf={nameOf} />,
+          r.m ? <MsgRow key={i} m={r.m} agents={agents} nameOf={nameOf} />
+          : r.p ? <PolicyRow key={i} p={r.p} nameOf={nameOf} />
+          : <DecisionRow key={i} d={r.d!} nameOf={nameOf} />,
         )}
         {shown.length === 0 && <div className="text-[11px] text-faint py-1">opening…</div>}
         {pending.map((h) => <InlineApproval key={h.request_id} h={h} nameOf={nameOf} />)}
@@ -198,6 +203,27 @@ function DecisionRow({ d, nameOf }: { d: Decision; nameOf: (id: string) => strin
       <span className="text-[11px] text-ink truncate flex-1 min-w-0">{d.title}</span>
       <SensitivityShield level={d.sensitivity} />
       <span className="mono text-[9px] text-faint shrink-0 hidden lg:inline truncate max-w-[120px]">{nameOf(d.sender)}→{nameOf(d.recipient)}</span>
+    </div>
+  );
+}
+
+function PolicyRow({ p, nameOf }: { p: PolicyReviewPayload; nameOf: (id: string) => string }) {
+  return (
+    <div className="flex items-start gap-2 px-2.5 py-1.5 rounded-md" title={p.rationale}
+      style={{ background: "rgba(209,42,58,0.06)", borderLeft: "2px solid var(--coral)" }}>
+      <ShieldCheck size={12} className="shrink-0 mt-0.5" style={{ color: "var(--coral)" }} />
+      <div className="min-w-0 flex-1">
+        <div className="text-[10.5px] leading-snug">
+          <span className="font-semibold" style={{ color: "var(--coral)" }}>{nameOf(p.officer)} · Policy Officer</span>
+          <span className="text-muted"> tightened </span>
+          <span className="mono uppercase text-[9px]" style={{ color: "var(--muted)" }}>{p.owner_outcome}</span>
+          <span className="text-muted"> → </span>
+          <span className="mono uppercase text-[9px] font-bold" style={{ color: "var(--coral)" }}>{p.final_outcome}</span>
+          <span className="text-muted"> on </span>
+          <span className="text-ink">{p.title}</span>
+        </div>
+        <div className="text-[9.5px] text-faint italic leading-snug mt-0.5 truncate">{p.rationale}</div>
+      </div>
     </div>
   );
 }

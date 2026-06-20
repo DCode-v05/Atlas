@@ -245,10 +245,15 @@ class Metrics(BaseModel):
     redundant_contacts_avoided: int = 0
     hitl_escalations: int = 0
     distinct_agents_contacted: int = 0
+    # Policy Officer (independent compliance review of each share decision)
+    policy_reviews: int = 0
+    policy_tightened: int = 0  # owner over-shares the officer caught + tightened
+    policy_upheld: int = 0     # owner decisions the officer agreed with
 
     def derived(self) -> dict[str, float]:
         """Ratios the UI shows; safe against divide-by-zero."""
         reqs = self.share_requests or 0
+        revs = self.policy_reviews or 0
         return {
             "redaction_ratio": round(self.items_redacted / reqs, 3) if reqs else 0.0,
             "share_ratio": round(self.items_shared / reqs, 3) if reqs else 0.0,
@@ -256,6 +261,7 @@ class Metrics(BaseModel):
             "efficiency": round(self.items_shared / self.messages, 3)
             if self.messages
             else 0.0,
+            "policy_intervention_rate": round(self.policy_tightened / revs, 3) if revs else 0.0,
         }
 
 

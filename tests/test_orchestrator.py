@@ -217,6 +217,26 @@ async def test_routing_follows_llm_choice_over_full_directory():
     assert res["routed_to"] == pick["id"]  # routed to the LLM's pick, not the scorer's
 
 
+async def test_policy_officer_reviews_every_share_and_meters_it(rt):
+    res = await rt.orchestrator.run_user_prompt(
+        "review the billing module pull request and share the engineering API style guide"
+    )
+    await _drain_until_completed(rt, res["context_id"], resolve_hitl=(True, ShareOutcome.SHARE), timeout=6.0)
+
+    reviews = [e for e in rt.broker.recent(20_000)
+               if e.event == "policy.review" and e.context_id == res["context_id"]]
+    assert reviews, "the Policy Officer should review each share decision"
+    officer = rt.snapshot.policy_officer_id
+    assert all(e.data["officer"] == officer for e in reviews)
+    # every review is metered (reviews == upheld + tightened)
+    m = rt.metrics.per_context[res["context_id"]]
+    assert m.policy_reviews == len(reviews)
+    assert m.policy_reviews == m.policy_upheld + m.policy_tightened
+    # final outcomes are never looser than what the owner proposed (tighten-only)
+    order = {"share": 0, "redact": 1, "escalate": 2, "deny": 3}
+    assert all(order[e.data["final_outcome"]] >= order[e.data["owner_outcome"]] for e in reviews)
+
+
 async def test_user_prompt_routes_and_completes(rt):
     res = await rt.orchestrator.run_user_prompt("help me fix the deployment pipeline incident on prod")
     assert res["rejected"] is False

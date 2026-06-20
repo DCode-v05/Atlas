@@ -146,3 +146,33 @@ def tighten_only(
     if CONSERVATISM[candidate_outcome] > CONSERVATISM[base.outcome]:
         return _finalize(item, candidate_outcome, base.rule_id + "+LLM", candidate_reason)
     return base
+
+
+def review_decision(
+    owner_decision: ShareDecision,
+    requester: OrgProfile,
+    owner: OrgProfile,
+    item: ContextItem,
+    intent: Intent,
+    *,
+    requester_manages_owner: bool = False,
+) -> tuple[ShareDecision, bool, ShareDecision]:
+    """Independent compliance review of an owner agent's share decision.
+
+    A dedicated **Policy Officer** re-derives the rule-based need-to-know floor
+    (``evaluate_share``) and applies it **tighten-only**: if the owner was more
+    permissive than policy allows, the officer tightens the outcome (an over-share
+    caught); it can never loosen. The matrix + SECRET cap are the hard floor, so
+    this realigns the live decision with the documented policy.
+
+    Returns ``(final_decision, intervened, policy_floor)`` — ``intervened`` is True
+    when the officer tightened the owner's outcome.
+    """
+    floor = evaluate_share(requester, owner, item, intent, requester_manages_owner=requester_manages_owner)
+    if CONSERVATISM[floor.outcome] > CONSERVATISM[owner_decision.outcome]:
+        final = _finalize(
+            item, floor.outcome, owner_decision.rule_id + "+POLICY",
+            f"Compliance review tightened {owner_decision.outcome.value}→{floor.outcome.value}: {floor.reason}",
+        )
+        return final, True, floor
+    return owner_decision, False, floor

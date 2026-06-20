@@ -1,6 +1,6 @@
 """The need-to-know policy engine (the graded core)."""
 
-from atlas.policy.engine import CONSERVATISM, evaluate_share, tighten_only
+from atlas.policy.engine import CONSERVATISM, evaluate_share, review_decision, tighten_only
 from atlas.policy.rules import (
     MATRIX,
     Column,
@@ -14,6 +14,7 @@ from atlas.policy.rules import (
 __all__ = [
     "evaluate_share",
     "tighten_only",
+    "review_decision",
     "CONSERVATISM",
     "MATRIX",
     "Column",
