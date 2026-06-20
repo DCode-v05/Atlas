@@ -67,6 +67,7 @@ export function ConversationDrawer() {
   const messages = useStore((s) => (cid ? s.messagesByCtx[cid] : null)) ?? [];
   const decisions = useStore((s) => (cid ? s.decisionsByCtx[cid] : null)) ?? [];
   const spans = useStore((s) => (cid ? s.tracesByCtx[cid] : null)) ?? [];
+  const metrics = useStore((s) => (cid ? s.metricsByCtx[cid] : null)) ?? null;
   const agents = useStore((s) => s.agents);
   const [tab, setTab] = useState("thread");
   const close = () => useStore.getState().selectContext(null);
@@ -91,7 +92,11 @@ export function ConversationDrawer() {
         </div>
       </div>
 
-      <Tabs tab={tab} set={setTab} tabs={[{ id: "thread", label: "Thread", n: messages.length }, { id: "trace", label: "Trace", n: spans.length }]} />
+      <Tabs tab={tab} set={setTab} tabs={[
+        { id: "thread", label: "Thread", n: messages.length },
+        { id: "metrics", label: "Metrics" },
+        { id: "trace", label: "Trace", n: spans.length },
+      ]} />
 
       {tab === "thread" && (
         <>
@@ -118,6 +123,14 @@ export function ConversationDrawer() {
         </>
       )}
 
+      {tab === "metrics" && (
+        <ContextMetrics
+          m={metrics}
+          msgCount={messages.length}
+          agentCount={new Set(messages.flatMap((mm) => [mm.sender, ...mm.recipients]).filter((a) => a !== "operator")).size}
+        />
+      )}
+
       {tab === "trace" && (
         <div className="p-3.5">
           <div className="flex items-center gap-1.5 mb-2 text-[10px] text-muted">
@@ -131,6 +144,64 @@ export function ConversationDrawer() {
         </div>
       )}
     </Drawer>
+  );
+}
+
+/** Coordination metrics for ONE task — how efficiently the agents talked. */
+function ContextMetrics({ m, msgCount, agentCount }: { m: Record<string, any> | null; msgCount: number; agentCount: number }) {
+  if (!m && msgCount === 0) return <div className="text-[11px] text-faint text-center py-6">No metrics yet — they appear as the agents coordinate.</div>;
+  const g = (k: string) => ((m?.[k] ?? 0) as number);
+  const derived = (m?.derived ?? {}) as Record<string, number>;
+  const shared = g("items_shared"), redacted = g("items_redacted"), denied = g("items_denied");
+  const total = Math.max(1, shared + redacted + denied);
+  const seg = (v: number, c: string) => <div style={{ width: `${(v / total) * 100}%`, background: c }} />;
+  const tiles: [string, number, string][] = [
+    ["Messages", Math.max(msgCount, g("messages")), "var(--cyan)"],
+    ["Agents contacted", Math.max(agentCount, g("distinct_agents_contacted")), "var(--accent)"],
+    ["Hops", g("hops"), "var(--violet)"],
+    ["Shared", shared, "var(--ok)"],
+    ["Redacted", redacted, "var(--amber)"],
+    ["Withheld", denied, "var(--coral)"],
+    ["HITL escalations", g("hitl_escalations"), "var(--violet)"],
+    ["Redundant avoided", g("redundant_contacts_avoided"), "var(--ok)"],
+  ];
+  if (m && "policy_reviews" in m) {
+    tiles.push(["Policy reviews", g("policy_reviews"), "var(--cyan)"]);
+    tiles.push(["Policy caught", g("policy_tightened"), "var(--coral)"]);
+  }
+  return (
+    <div className="p-3.5 flex flex-col gap-3">
+      <div className="flex items-center gap-1.5 text-[10px] text-muted">
+        <Activity size={12} style={{ color: "var(--accent)" }} />
+        <span>Coordination efficiency for this single task — how much was shared vs held back, and how many agents it took.</span>
+      </div>
+      <div className="grid grid-cols-3 gap-1.5">
+        {tiles.map(([label, value, c]) => (
+          <div key={label} className="relative inset rounded-md px-2.5 py-1.5 overflow-hidden">
+            <span className="absolute left-0 top-0 bottom-0 w-[3px]" style={{ background: c }} />
+            <div className="eyebrow text-[8px]">{label}</div>
+            <div className="font-display tnum text-[20px] leading-none font-bold mt-1" style={{ color: c }}>{value}</div>
+          </div>
+        ))}
+      </div>
+      <div>
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="eyebrow text-[8.5px]">Context disposition</span>
+          <span className="mono text-[9px] text-faint">
+            eff {(derived.efficiency ?? 0).toFixed(2)} · redact {((derived.redaction_ratio ?? 0) * 100).toFixed(0)}%
+            {"policy_intervention_rate" in derived ? ` · pol ${((derived.policy_intervention_rate ?? 0) * 100).toFixed(0)}%` : ""}
+          </span>
+        </div>
+        <div className="flex h-2.5 rounded-full overflow-hidden" style={{ background: "var(--bg-2)" }}>
+          {seg(shared, "var(--ok)")}{seg(redacted, "var(--amber)")}{seg(denied, "var(--coral)")}
+        </div>
+        <div className="flex gap-3 mt-1 text-[9px] mono">
+          <span style={{ color: "var(--ok)" }}>▪ shared {shared}</span>
+          <span style={{ color: "var(--amber)" }}>▪ redacted {redacted}</span>
+          <span style={{ color: "var(--coral)" }}>▪ withheld {denied}</span>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -224,6 +295,7 @@ export function AgentCardDrawer() {
       <div className="p-4">
         {tab === "overview" && (
           <>
+            <AgentContextStats card={card} />
             {(card?.goal ?? node?.goal) && (
               <Section label="Goal · responsibility"><div className="text-[12px] text-ink leading-snug">{card?.goal ?? node?.goal}</div></Section>
             )}
@@ -302,6 +374,31 @@ export function AgentCardDrawer() {
 
 function Tag({ children, color }: { children: React.ReactNode; color?: string }) {
   return <span className="text-[10px] px-1.5 py-0.5 rounded-sm" style={{ color: color ?? "var(--muted)", background: color ? `${color}14` : "var(--inset)", border: `1px solid ${color ? `${color}33` : "var(--border)"}` }}>{children}</span>;
+}
+
+/** A quick numeric footprint of an agent's OWN context — what it holds privately
+ *  and what it has learned from others (and at what fidelity). */
+function AgentContextStats({ card }: { card: AgentCardView | null }) {
+  const SENS = new Set(["confidential", "restricted", "secret"]);
+  const owned = card?.owned_items ?? [];
+  const sensitive = owned.filter((it) => SENS.has(it.sensitivity)).length;
+  const learned = card?.learned ?? [];
+  const raw = learned.filter((f) => !f.redacted).length;
+  const redacted = learned.filter((f) => f.redacted).length;
+  const Stat = ({ label, value, sub, color }: { label: string; value: number; sub?: string; color: string }) => (
+    <div className="relative inset rounded-md px-2.5 py-1.5 overflow-hidden flex-1">
+      <span className="absolute left-0 top-0 bottom-0 w-[3px]" style={{ background: color }} />
+      <div className="eyebrow text-[8px]">{label}</div>
+      <div className="font-display tnum text-[19px] leading-none font-bold mt-1" style={{ color }}>{value}</div>
+      {sub && <div className="mono text-[8.5px] text-faint mt-0.5">{sub}</div>}
+    </div>
+  );
+  return (
+    <div className="flex gap-1.5 mb-1">
+      <Stat label="Context owned" value={owned.length} sub={`${sensitive} sensitive`} color="var(--amber)" />
+      <Stat label="Learned" value={learned.length} sub={`${raw} raw · ${redacted} redacted`} color="var(--cyan)" />
+    </div>
+  );
 }
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
   return <div className="mt-4 first:mt-0"><div className="eyebrow mb-2">{label}</div>{children}</div>;
