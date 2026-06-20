@@ -22,6 +22,7 @@ from atlas.events.schema import (
     PromptAcceptedPayload,
     TaskStatePayload,
     ThreadCreatedPayload,
+    TraceSpanPayload,
 )
 
 __all__ = [
@@ -46,4 +47,5 @@ __all__ = [
     "CronTickPayload",
     "CronStatePayload",
     "LlmStatusPayload",
+    "TraceSpanPayload",
 ]

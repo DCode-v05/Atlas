@@ -100,6 +100,123 @@ async def test_llm_gate_admits_when_in_scope():
     assert res["rejected"] is False
 
 
+class _GateLLM:
+    """Available LLM that admits via judge_scope and authors text — for the gate
+    (greeting) and group-decision paths."""
+    name = "gate-fake"
+
+    @property
+    def available(self):
+        return True
+
+    async def phrase(self, kind, ctx):
+        return f"[{kind}] hello there"
+
+    async def rerank(self, prompt, ids, blurbs):
+        return None
+
+    async def reason_share(self, **kw):
+        return None
+
+    async def judge_scope(self, prompt, *, org_summary):
+        return True
+
+    async def judge_group(self, prompt, roster):
+        return None
+
+    async def route(self, prompt, directory):
+        return None  # fall back to the deterministic scorer unless a test overrides
+
+
+async def test_greeting_is_admitted_and_answered():
+    rt = build_runtime(get_settings(), step_delay=0.0, llm=_GateLLM())
+    res = await rt.orchestrator.run_user_prompt("Hi")
+    assert res["rejected"] is False  # greeting admitted by the LLM gate, not blocked
+    assert res["routed_to"] == rt.snapshot.ceo_id  # no skill match → CEO answers
+    task = await _drain_until_completed(rt, res["context_id"], timeout=3.0)
+    assert task.status.state == TaskState.COMPLETED
+    msgs = [e for e in rt.broker.recent(10_000)
+            if e.event == "message.sent" and e.context_id == res["context_id"]]
+    assert msgs  # the agent actually replied to the greeting
+
+
+async def test_llm_selects_group_members():
+    # The prompt has NO group keyword, so the deterministic heuristic would NOT
+    # group it — but the LLM decides to coordinate a subset of the team.
+    class _GroupLLM(_GateLLM):
+        async def judge_group(self, prompt, roster):
+            return [r[0] for r in roster[:2]]  # pick up to 2 real teammates
+
+    rt = build_runtime(get_settings(), step_delay=0.0, llm=_GroupLLM())
+    res = await rt.orchestrator.run_user_prompt("review the billing module pull request")
+    await _drain_until_completed(rt, res["context_id"], resolve_hitl=(True, ShareOutcome.SHARE), timeout=5.0)
+    groups = [e for e in rt.broker.recent(10_000)
+              if e.event == "group.formed" and e.context_id == res["context_id"]]
+    assert groups, "the LLM's group decision should have formed a group"
+    assert len(groups[0].data["members"]) >= 2  # initiator + selected teammate(s)
+
+
+async def test_trace_spans_and_learned_facts_are_exposed(rt):
+    from atlas.api.viewmodels import agent_card_view
+
+    res = await rt.orchestrator.run_user_prompt(
+        "review the billing module pull request and share the engineering API style guide"
+    )
+    await _drain_until_completed(rt, res["context_id"], resolve_hitl=(True, ShareOutcome.SHARE), timeout=6.0)
+
+    spans = [e for e in rt.broker.recent(20_000) if e.event == "trace.span"]
+    assert spans, "operations should emit trace spans"
+    kinds = {e.data["kind"] for e in spans}
+    assert {"route", "think", "phrase", "decide_share"} & kinds  # core operations traced
+    # messages carry the agent's reasoning (thinking layer)
+    msgs = [e for e in rt.broker.recent(20_000) if e.event == "message.sent" and e.data.get("thinking")]
+    assert msgs, "agent messages should carry a 'thinking' field"
+    # the agent card exposes its trace + learned facts (with fidelity)
+    card = agent_card_view(rt, res["routed_to"])
+    assert isinstance(card["trace"], list) and card["trace"]
+    assert isinstance(card["learned"], list)
+
+
+async def test_owner_agent_llm_decides_the_share():
+    # The owner agent (Mistral) makes the share decision — no deterministic matrix.
+    # Here it chooses DENY for a confidential item the matrix might have redacted.
+    from atlas.org.ext_models import ShareOutcome as SO
+
+    class _OwnerLLM(_GateLLM):
+        async def decide_share(self, *, requester, owner, item, intent):
+            return (SO.DENY, "owner judged this is outside the requester's need-to-know")
+
+    rt = build_runtime(get_settings(), step_delay=0.0, llm=_OwnerLLM())
+    res = await rt.orchestrator.run_user_prompt(
+        "I'm refactoring the event pipeline; what's the Atlas Core architecture decision record?"
+    )
+    await _drain_until_completed(rt, res["context_id"], timeout=5.0)
+    denied = [e for e in rt.broker.recent(20_000) if e.event == "context.denied" and e.context_id == res["context_id"]]
+    shared = [e for e in rt.broker.recent(20_000) if e.event == "context.shared" and e.context_id == res["context_id"]]
+    assert denied and not shared, "the owner LLM's DENY decision should be honoured (no matrix override)"
+    # the decision is traced as a live Mistral call, not deterministic policy
+    spans = [e.data for e in rt.broker.recent(20_000) if e.event == "trace.span" and e.data["kind"] == "decide_share"]
+    assert spans and all(s["live"] for s in spans)
+
+
+async def test_routing_follows_llm_choice_over_full_directory():
+    # The LLM router picks an agent the skill-scorer never would (a People/HR person
+    # for a billing-engineering task) — proving routing follows the LLM's choice,
+    # made over the WHOLE directory, not the deterministic scorer.
+    pick = {"id": None}
+
+    class _RouteLLM(_GateLLM):
+        async def route(self, prompt, directory):
+            return pick["id"]
+
+    rt = build_runtime(get_settings(), step_delay=0.0, llm=_RouteLLM())
+    pick["id"] = next(a.id for a in rt.snapshot.agents.values() if a.profile.department.value == "hr")
+    # the directory the LLM chooses from is the full 100-agent company
+    assert len(rt.orchestrator._agent_directory().splitlines()) == 100
+    res = await rt.orchestrator.run_user_prompt("fix the billing payment integration bug")
+    assert res["routed_to"] == pick["id"]  # routed to the LLM's pick, not the scorer's
+
+
 async def test_user_prompt_routes_and_completes(rt):
     res = await rt.orchestrator.run_user_prompt("help me fix the deployment pipeline incident on prod")
     assert res["rejected"] is False

@@ -42,12 +42,33 @@ from atlas.org.ext_models import (
     CoordinationMode,
     HitlRequest,
     Intent,
+    ShareDecision,
     ShareOutcome,
 )
 from atlas.org.generator import OrgSnapshot
-from atlas.policy import evaluate_share, tighten_only
+from atlas.policy import evaluate_share
 
 USER_NODE = "operator"
+
+
+def _clip(s: str, n: int = 88) -> str:
+    """Word-boundary truncation with an ellipsis (no broken mid-word cuts)."""
+    s = (s or "").strip()
+    return s if len(s) <= n else s[:n].rsplit(" ", 1)[0] + "…"
+
+
+def _build_llm_decision(item: ContextItem, outcome: ShareOutcome, reason: str) -> ShareDecision:
+    """Wrap the owner agent's LLM decision into a ShareDecision (fills the delivered
+    body for SHARE/REDACT so the exact value never depends on the model's wording)."""
+    body = None
+    if outcome == ShareOutcome.SHARE:
+        body = item.body
+    elif outcome == ShareOutcome.REDACT:
+        body = item.redacted_summary or f"[redacted: {item.title}]"
+    return ShareDecision(
+        outcome=outcome, reason=reason, item_id=item.item_id, rule_id="LLM-OWNER",
+        sensitivity=item.sensitivity, delivered_title=item.title, delivered_body=body,
+    )
 
 GROUP_WORDS = frozenset(
     {
@@ -71,6 +92,7 @@ class Orchestrator:
         threads: ThreadStore,
         groups: GroupStore,
         llm: LLMProvider,
+        trace=None,
         hitl_timeout: float = 0.0,
         step_delay: float = 0.45,
         cron_max_inflight: int = 3,
@@ -84,6 +106,7 @@ class Orchestrator:
         self.threads = threads
         self.groups = groups
         self.llm = llm
+        self.trace = trace
         self.hitl_timeout = hitl_timeout
         self.step_delay = step_delay
         self.cron_max_inflight = cron_max_inflight
@@ -109,8 +132,10 @@ class Orchestrator:
         # "write a python script for wifi" is refused despite sharing the word
         # "python" with engineering's skills). If the LLM is unavailable or the
         # call fails/throttles, we fall back to the lexical verdict above.
+        gate_live = False
         if self.llm.available:
             verdict = await self.llm.judge_scope(prompt, org_summary=self._org_summary())
+            gate_live = verdict is not None
             if verdict is True:
                 ok, reason = True, ""
             elif verdict is False:
@@ -118,24 +143,37 @@ class Orchestrator:
         if not ok:
             self.router.reject(prompt, reason or GATE_REASON)
             return {"rejected": True, "reason": reason or GATE_REASON}
-        chosen, scored = self.router.route_prompt(prompt)
-        if not chosen:
-            self.router.reject(prompt, GATE_REASON)
-            return {"rejected": True, "reason": GATE_REASON}
-
-        if self.llm.available and len(scored) > 1:
-            try:
-                best = await self.llm.rerank(
-                    prompt, [a for a, _ in scored], {a: self._blurb(a) for a, _ in scored}
-                )
-                if best:
-                    chosen = best
-            except Exception:
-                pass
+        # Routing is LLM-decided: Mistral reads the FULL company directory (all 100
+        # agent cards) and picks the best-fit owner — no deterministic shortlist.
+        # A bare greeting / social message has no routable tokens; the deterministic
+        # scorer is kept ONLY as a fallback for when the LLM is unavailable.
+        greeting = not set(tokenize(prompt))
+        route_live = False
+        if greeting:
+            chosen = self.snapshot.ceo_id
+        else:
+            chosen = None
+            if self.llm.available:
+                try:
+                    pick = await self.llm.route(prompt, self._agent_directory())
+                    if pick in self.registry.agents:
+                        chosen = pick
+                        route_live = True
+                except Exception:
+                    chosen = None
+            if chosen is None:  # LLM unavailable / invalid pick → deterministic safety net
+                chosen, _ = self.router.route_prompt(prompt)
+            if chosen is None:  # nothing matched even deterministically → treat as social
+                greeting = True
+                chosen = self.snapshot.ceo_id
+        scored = [(chosen, 1.0)]
 
         context_id = new_id("ctx-")
         task = self.router.new_task(context_id, message=prompt)
         agent = self.registry.get(chosen)
+        self._trace(USER_NODE, "judge_scope", f'admitted — “{_clip(prompt)}”', live=gate_live, context_id=context_id)
+        self._trace(chosen, "route", f'routed here — “{_clip(prompt)}”', live=route_live, context_id=context_id,
+                    detail="Mistral chose this agent from all 100 cards" if route_live else "deterministic fallback")
         self.router.emit_discovery(
             level=1, query=prompt, scored=scored, chosen=chosen, requester=USER_NODE, context_id=context_id
         )
@@ -147,7 +185,10 @@ class Orchestrator:
             ),
             context_id=context_id,
         )
-        self._spawn(self._run_scenario(prompt, chosen, context_id, task.id))
+        self._spawn(
+            self._run_greeting(prompt, chosen, context_id, task.id) if greeting
+            else self._run_scenario(prompt, chosen, context_id, task.id)
+        )
         return {
             "rejected": False, "task_id": task.id, "context_id": context_id,
             "routed_to": chosen, "routed_to_name": agent.name,
@@ -192,10 +233,11 @@ class Orchestrator:
             await self._pause()
 
             needs = self._identify_needs(agent, prompt)
-            grouped = self._should_group(agent, prompt)
+            group_members = await self._decide_group(agent, prompt, context_id)
+            grouped = bool(group_members)
 
             if grouped:
-                await self._run_group(agent, prompt, context_id, task_id)
+                await self._run_group(agent, prompt, context_id, task_id, member_ids=group_members)
 
             if needs:
                 topic = needs[0][0].title
@@ -242,6 +284,33 @@ class Orchestrator:
         self.router.set_status(agent.id, AgentStatus.IDLE)
         self.metrics.emit(context_id)
 
+    async def _run_greeting(self, prompt: str, agent_id: str, context_id: str, task_id: str) -> None:
+        """A greeting / social message the gate admitted but that needs no task work
+        — the agent simply replies, warmly, in one real Mistral-authored line."""
+        task = self.router.tasks[task_id]
+        agent = self.registry.get(agent_id)
+        try:
+            self.metrics.record_hop(context_id, agent_id)
+            self.router.set_status(agent_id, AgentStatus.SPEAKING)
+            self.router.set_task_state(task, TaskState.WORKING)
+            await self._pause()
+            text = await self._say("greeting", {"agent": agent.name, "prompt": prompt})
+            if text:
+                self.broker.emit(
+                    EventType.MESSAGE_SENT,
+                    MessageSentPayload(
+                        message_id=new_id("msg-"), context_id=context_id, sender=agent_id,
+                        recipients=[USER_NODE], mode=CoordinationMode.INDIVIDUAL.value, role="agent", text=text,
+                    ),
+                    context_id=context_id,
+                )
+            self.router.set_task_state(task, TaskState.COMPLETED, message=text)
+        except Exception as exc:  # pragma: no cover - safety net
+            self.router.set_task_state(task, TaskState.FAILED, message=f"greeting error: {exc}")
+        finally:
+            self.router.set_status(agent_id, AgentStatus.IDLE)
+            self.metrics.emit(context_id)
+
     # ── needs / grouping heuristics ─────────────────────────────────────────
     def _identify_needs(self, agent: OrgAgent, prompt: str) -> list[tuple[ContextItem, float]]:
         q = set(tokenize(prompt)) | set(tokenize(agent.profile.role_title))
@@ -259,6 +328,35 @@ class Orchestrator:
 
     def _should_group(self, agent: OrgAgent, prompt: str) -> bool:
         return bool(set(tokenize(prompt)) & GROUP_WORDS) and bool(agent.profile.teams)
+
+    async def _decide_group(self, agent: OrgAgent, prompt: str, context_id: Optional[str] = None) -> list[str]:
+        """LLM decides whether to coordinate as a group and WHICH teammates to pull
+        in (a subset of the agent's REAL team roster — the model never invents
+        people). Falls back to the keyword heuristic + whole team if the LLM is
+        unavailable / undecided. Returns the member ids to involve ([] = solo)."""
+        if not agent.profile.teams:
+            return []
+        team_id = agent.profile.teams[0]
+        roster_ids = [m for m in self.snapshot.teams.get(team_id, []) if m != agent.id]
+        if not roster_ids:
+            return []
+        if self.llm.available:
+            roster = [
+                (rid, self.registry.get(rid).name, self.registry.get(rid).profile.role_title)
+                for rid in roster_ids
+            ]
+            try:
+                sel = await self.llm.judge_group(prompt, roster)
+            except Exception:
+                sel = None
+            if sel is not None:  # LLM decided — keep only valid roster ids
+                members = [s for s in sel if s in roster_ids]
+                self._trace(agent.id, "judge_group",
+                            f"coordinate {len(members)} teammate(s)" if members else "handle solo (1:1)",
+                            live=True, context_id=context_id)
+                return members
+        # fallback: deterministic keyword heuristic → coordinate the whole team
+        return roster_ids if self._should_group(agent, prompt) else []
 
     # ── individual sourcing ─────────────────────────────────────────────────
     async def _gather_individual(
@@ -301,8 +399,7 @@ class Orchestrator:
                 thread.message_ids.append(msg.messageId)
 
             manages = self.snapshot.manages_transitively(agent.id, owner.id)
-            decision = evaluate_share(agent.profile, owner.profile, item, intent, requester_manages_owner=manages)
-            decision = await self._maybe_llm_tighten(decision, agent, owner, item, intent)
+            decision = await self._decide_share(agent, owner, item, intent, context_id, manages)
             self.metrics.record_decision(context_id, decision.outcome)
             await self._apply_decision(
                 decision, agent, owner, item, intent, context_id, task_id,
@@ -428,12 +525,14 @@ class Orchestrator:
         self.router.set_status(mgr_id, AgentStatus.IDLE)
 
     # ── group coordination ──────────────────────────────────────────────────
-    async def _run_group(self, agent: OrgAgent, prompt: str, context_id: str, task_id: str) -> None:
+    async def _run_group(
+        self, agent: OrgAgent, prompt: str, context_id: str, task_id: str, *, member_ids: list[str] | None = None
+    ) -> None:
         task = self.router.tasks[task_id]
         team_id = agent.profile.teams[0]
-        members = list(self.snapshot.teams.get(team_id, []))
-        if agent.id not in members:
-            members.append(agent.id)
+        if member_ids is None:  # no LLM selection → the whole team (deterministic fallback)
+            member_ids = [m for m in self.snapshot.teams.get(team_id, []) if m != agent.id]
+        members = [agent.id] + [m for m in member_ids if m != agent.id]
         topic = self._topic(prompt)
         group = self.groups.create(context_id, team_id, topic, members, initiator=agent.id)
         self.router.announce_group(group)
@@ -499,8 +598,7 @@ class Orchestrator:
         if sent:
             group.message_ids.append(sent.messageId)
         manages = self.snapshot.manages_transitively(initiator.id, owner.id)
-        decision = evaluate_share(initiator.profile, owner.profile, item, intent, requester_manages_owner=manages)
-        decision = await self._maybe_llm_tighten(decision, initiator, owner, item, intent)
+        decision = await self._decide_share(initiator, owner, item, intent, context_id, manages)
         self.metrics.record_decision(context_id, decision.outcome)
         group.shared_items.append(item.item_id)
         await self._apply_decision(
@@ -522,6 +620,25 @@ class Orchestrator:
             context_id=context_id,
         )
 
+    def _trace(self, agent_id: str, kind: str, summary: str, *, live: bool = False,
+               context_id: Optional[str] = None, detail: Optional[str] = None) -> None:
+        if self.trace is not None:
+            self.trace.record(agent_id=agent_id, kind=kind, summary=summary, live=live,
+                              context_id=context_id, detail=detail)
+
+    async def _think(self, kind: str, ctx: dict) -> Optional[str]:
+        """The agent reasons briefly before acting — real Mistral, or absent (no
+        template fallback for reasoning, same as the message itself)."""
+        if not self.llm.available:
+            return None
+        think = getattr(self.llm, "think", None)
+        if think is None:
+            return None
+        try:
+            return await think(kind, ctx)
+        except Exception:
+            return None
+
     async def _say(self, kind: str, ctx: dict) -> Optional[str]:
         """Real Mistral text for this message — or None if the LLM can't produce
         it. Templates were removed: every agent message is genuine Mistral, or it
@@ -539,38 +656,65 @@ class Orchestrator:
         mode: CoordinationMode = CoordinationMode.INDIVIDUAL, intent: Optional[Intent] = None,
         thread_id: Optional[str] = None, group_id: Optional[str] = None, payload: Optional[str] = None,
     ):
-        """Author the line with Mistral and send it. Returns the Message, or None
-        when the LLM couldn't produce text (the message is omitted — never
-        templated). A ``payload`` (a secret body/summary) is appended verbatim so
-        the exact value never depends on the model's wording."""
+        """Think, then author the line with Mistral and send it. Returns the
+        Message, or None when the LLM couldn't produce text (the message — and its
+        thought — are dropped; never templated). A ``payload`` (secret body/summary)
+        is appended verbatim so the exact value never depends on the model."""
+        thought = await self._think(kind, ctx)  # think before responding
         text = await self._say(kind, ctx)
         if not text:
-            return None
+            self._trace(sender, "phrase", f"{kind}: no reply (LLM unavailable)", live=False, context_id=context_id)
+            return None  # message omitted → thought dropped (no dangling reasoning)
+        if thought:
+            self._trace(sender, "think", thought, live=True, context_id=context_id)
+        self._trace(sender, "phrase", text, live=True, context_id=context_id, detail=kind.replace("_", " "))
         if payload and payload not in text:
             text = f"{text} {payload}"
         return self.router.send_message(
             context_id=context_id, sender=sender, recipients=recipients, text=text,
-            intent=intent, mode=mode, thread_id=thread_id, group_id=group_id, task=task,
+            intent=intent, mode=mode, thread_id=thread_id, group_id=group_id, task=task, thinking=thought,
         )
 
-    async def _maybe_llm_tighten(self, decision, agent, owner, item, intent):
-        if not self.llm.available:
-            return decision
-        try:
-            res = await self.llm.reason_share(
-                requester=agent.profile, owner=owner.profile, item=item, intent=intent, base_outcome=decision.outcome
-            )
-            if res:
+    async def _decide_share(self, requester: OrgAgent, owner: OrgAgent, item: ContextItem,
+                            intent: Intent, context_id: str, manages: bool) -> ShareDecision:
+        """The OWNER agent (Mistral) decides share / redact / deny / escalate for its
+        OWN data — its own judgement, no rule matrix. The deterministic policy is kept
+        ONLY as a safe offline net for when the LLM is unreachable (marked live=False)."""
+        decide = getattr(self.llm, "decide_share", None)
+        if self.llm.available and decide is not None:
+            try:
+                res = await decide(requester=requester.profile, owner=owner.profile, item=item, intent=intent)
+            except Exception:
+                res = None
+            if res is not None:
                 outcome, reason = res
-                return tighten_only(decision, outcome, reason, item)
-        except Exception:
-            pass
+                self._trace(owner.id, "decide_share", f"{outcome.value.upper()} '{item.title}'",
+                            live=True, context_id=context_id, detail=reason)
+                return _build_llm_decision(item, outcome, reason)
+        # offline fallback: the deterministic policy matrix (only when the LLM is down)
+        decision = evaluate_share(requester.profile, owner.profile, item, intent, requester_manages_owner=manages)
+        self._trace(owner.id, "decide_share", f"{decision.outcome.value.upper()} '{item.title}' (offline fallback)",
+                    live=False, context_id=context_id, detail=decision.reason)
         return decision
 
     def _blurb(self, aid: str) -> str:
         ag = self.registry.get(aid)
         skills = ", ".join(s.name for s in ag.card.skills[:3])
         return f"{ag.profile.role_title}, {ag.profile.department.value} — {skills}"
+
+    def _agent_directory(self) -> str:
+        """One compact 'card' per agent — the whole company the LLM router chooses
+        from. Cached, since the org is immutable for a given seed."""
+        cached = getattr(self, "_directory_cache", None)
+        if cached is None:
+            lines = []
+            for ag in self.snapshot.agents.values():
+                p = ag.profile
+                tags = ", ".join(sorted(ag.card.skill_tags)[:6])
+                lines.append(f"{ag.id} | {ag.name} — {p.role_title}, {p.department.value}, L{int(p.level)} | skills: {tags}")
+            cached = "\n".join(lines)
+            self._directory_cache = cached
+        return cached
 
     def _topic(self, prompt: str) -> str:
         toks = tokenize(prompt)

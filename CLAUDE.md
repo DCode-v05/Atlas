@@ -71,12 +71,19 @@ Core A2A types live in `atlas/a2a` (`AgentCard`, `Message`, `Part`, `Task` +
 - `urn:atlas:ext:need-to-know:v1` — sensitivity + scope on items; **intent** on messages
 - `urn:atlas:ext:coordination:v1` — group + HITL signalling
 
-## The need-to-know policy engine (the graded core — `atlas/policy`)
+## The need-to-know decision
 
-`evaluate_share(requester, owner, item, intent)` returns a `ShareDecision`
-(`SHARE` / `REDACT` / `DENY` / `ESCALATE`) with a human-readable `reason` and a
-`rule_id`. A request lands in one of five **columns** by (scope-match × clearance
-× intent legitimacy); the column + sensitivity selects the outcome:
+**The OWNER agent (Mistral) decides** whether to share its own data —
+`llm.decide_share(requester, owner, item, intent)` returns `SHARE` / `REDACT` /
+`DENY` / `ESCALATE`(→HITL) from the model's own judgement, weighing sensitivity,
+the requester's role/clearance/teams/projects, and their stated reason. **There is
+NO deterministic matrix and NO secret floor in the live path** — the model may even
+share a secret if it judges the requester is entitled (the user's explicit choice).
+Every decision is a `decide_share` trace span (`live=True`).
+
+The deterministic policy engine below (`atlas/policy`, `evaluate_share`) survives
+**only as the offline fallback** — used (and traced `live=False`) when the LLM is
+genuinely unreachable, so the app still makes a safe decision without a key:
 
 | Sensitivity | exact&legit | exact&weak | related | out/under-cleared | illegitimate |
 |---|---|---|---|---|---|
@@ -93,17 +100,28 @@ outcome is ESCALATE — no override ever leaks it. An optional Groq pass may onl
 
 ## How a prompt flows (`atlas/conversation/orchestrator.py`)
 
-The **org-scope gate** is LLM-semantic: a cheap lexical pre-check, then Mistral
-judges whether the prompt is about the company (people/projects/products/ops) and
-its verdict is authoritative (falls back to lexical only if the LLM is unavailable).
-The cron path skips the gate (goals are in-scope by construction).
+**The judgment calls are LLM-decided; facts and the need-to-know policy are not.**
+The **org-scope gate** is Mistral (lexical only as a fallback when the LLM is down):
+it admits company requests **and greetings/social pleasantries** (a bare "hi" routes
+to the CEO for a friendly reply), and blocks only non-company topics. **Grouping is
+LLM-decided** too: Mistral chooses whether to coordinate as a group and *which*
+teammates to pull in — but only from the agent's **real team roster** (it never
+invents people). **Routing is fully LLM**: Mistral reads the WHOLE directory (all 100
+agent cards — id, name, role, dept, skills) and picks the owner; the deterministic
+skill-scorer survives only as a fallback for when the LLM is down.
+What stays deterministic by design: who-owns-what / team rosters (the routing directory
+itself is built from facts, but the *choice* is the LLM's; an LLM inventing who owns a
+secret would hallucinate private data), and the **need-to-know policy**
+(share/redact/deny/escalate) — the security core, where the LLM may only *tighten*,
+and ESCALATE goes to the human (HITL). The cron path skips the gate (goals are
+in-scope by construction).
 
 ```
 prompt → org-scope gate (LLM-judged) → Level-1 route (→ best agent) → open Task →
   agent identifies context needs → Level-2 discovery (→ owners) →
     for each owner: ask (with intent) → policy decides →
       SHARE / REDACT / DENY / ESCALATE→HITL (task input-required, operator approves) →
-    or form a GROUP session when the prompt is about team coordination →
+    or form a GROUP session when Mistral decides to coordinate the team →
   finalize Task → metrics emitted
 ```
 

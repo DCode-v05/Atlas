@@ -78,9 +78,20 @@ export interface MessageSentPayload {
   mode: "individual" | "group";
   role: "user" | "agent";
   text: string;
+  thinking?: string | null;
   intent?: IntentView | null;
   thread_id?: string | null;
   group_id?: string | null;
+}
+export interface TraceSpanPayload {
+  span_id: string;
+  ts: string;
+  agent_id: string;
+  context_id?: string | null;
+  kind: string; // route | think | judge_scope | judge_group | phrase | reason_share | policy
+  summary: string;
+  live: boolean;
+  detail?: string | null;
 }
 export interface ContextSharePayload {
   context_id: string;
@@ -161,6 +172,7 @@ export const KNOWN_EVENTS = new Set<string>([
   "cron.tick",
   "cron.state",
   "llm.status",
+  "trace.span",
 ]);
 
 // ─── REST view models (atlas/api/viewmodels.py) ──────────────────────────────
@@ -259,6 +271,8 @@ export interface AgentCardView {
     min_clearance: number;
   }[];
   learned_count: number;
+  learned?: { item_id: string; title: string; sensitivity: string; redacted: boolean; source: string; source_name: string }[];
+  trace?: TraceSpanPayload[];
   manager?: string | null;
   manages: string[];
 }
@@ -272,6 +286,7 @@ export interface ChatMessage {
   mode: "individual" | "group";
   role: string;
   text: string;
+  thinking?: string | null;
   intent?: IntentView | null;
   threadId?: string | null;
   groupId?: string | null;

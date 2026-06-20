@@ -183,6 +183,7 @@ class Router:
         thread_id: Optional[str] = None,
         group_id: Optional[str] = None,
         task: Optional[Task] = None,
+        thinking: Optional[str] = None,
     ) -> Message:
         meta: dict = {}
         extensions: list[str] = []
@@ -217,6 +218,7 @@ class Router:
                 mode=mode.value,
                 role=role,
                 text=text,
+                thinking=thinking,
                 intent=intent_view,
                 thread_id=thread_id,
                 group_id=group_id,

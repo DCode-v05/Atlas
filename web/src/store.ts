@@ -12,6 +12,7 @@ import type {
   MessageSentPayload,
   OrgView,
   ThreadCreatedPayload,
+  TraceSpanPayload,
 } from "./types";
 import { KNOWN_EVENTS } from "./types";
 
@@ -37,7 +38,7 @@ export interface ContextMeta {
 
 export type Decision = ContextSharePayload & { kind: string; ts: number };
 
-type View = "convo" | "network" | "roster" | "projects";
+type View = "convo" | "history" | "network" | "roster" | "projects";
 
 interface State {
   conn: "connecting" | "live" | "down";
@@ -47,6 +48,7 @@ interface State {
   links: LiveLink[];
   messagesByCtx: Record<string, ChatMessage[]>;
   decisionsByCtx: Record<string, Decision[]>;
+  tracesByCtx: Record<string, TraceSpanPayload[]>;
   threads: Record<string, ThreadCreatedPayload>;
   groups: Record<string, GroupFormedPayload>;
   contexts: Record<string, ContextMeta>;
@@ -89,6 +91,7 @@ export const useStore = create<State>((set, get) => ({
   links: [],
   messagesByCtx: {},
   decisionsByCtx: {},
+  tracesByCtx: {},
   threads: {},
   groups: {},
   contexts: {},
@@ -251,6 +254,7 @@ export const useStore = create<State>((set, get) => ({
           mode: m.mode,
           role: m.role,
           text: m.text,
+          thinking: m.thinking,
           intent: m.intent,
           threadId: m.thread_id,
           groupId: m.group_id,
@@ -307,6 +311,15 @@ export const useStore = create<State>((set, get) => ({
         set({ llm: d as LlmStatusPayload });
         if (d.errored && !prev?.errored) pushFeed(`LLM error — running on templates · ${d.reason || ""}`, "danger");
         else if (d.throttled && !prev?.throttled) pushFeed(`Bedrock throttled — ${d.reason || "rate limited"}`, "warn");
+        break;
+      }
+
+      case "trace.span": {
+        const sp = d as TraceSpanPayload;
+        if (sp.context_id) {
+          const list = [...(get().tracesByCtx[sp.context_id] || []), sp].slice(-240);
+          set({ tracesByCtx: { ...get().tracesByCtx, [sp.context_id]: list } });
+        }
         break;
       }
 

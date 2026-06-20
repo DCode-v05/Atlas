@@ -91,6 +91,18 @@ export const OUTCOME_META: Record<string, { color: string; label: string }> = {
   reused: { color: "#5c6675", label: "Reused" },
 };
 
+// trace span kind → color + label (agent observability)
+export const TRACE_KIND_META: Record<string, { color: string; label: string }> = {
+  route: { color: "#2f4bdb", label: "Route" },
+  think: { color: "#6d28d9", label: "Think" },
+  judge_scope: { color: "#0e8fa8", label: "Gate" },
+  judge_group: { color: "#9333ea", label: "Group?" },
+  phrase: { color: "#0a8f5b", label: "Message" },
+  decide_share: { color: "#b9710a", label: "Decide" },
+  reason_share: { color: "#b9710a", label: "Share review" },
+  policy: { color: "#5c6675", label: "Policy" },
+};
+
 export const LEVEL_LABEL: Record<number, string> = {
   1: "IC",
   2: "Lead",

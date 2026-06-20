@@ -15,19 +15,27 @@ const EXAMPLES = [
 
 export function ConversationTimeline() {
   const order = useStore((s) => s.contextOrder);
+  const contexts = useStore((s) => s.contexts);
   const cron = useStore((s) => s.cron);
 
-  if (order.length === 0) return <EmptyState />;
+  // Only LIVE goals here — completed ones move to the History tab.
+  const live = order.filter((cid) => {
+    const st = contexts[cid]?.state;
+    return st !== "completed" && st !== "failed";
+  });
+
+  if (live.length === 0) return <EmptyState />;
 
   return (
     <div className="h-full overflow-y-auto px-3 py-3">
       <div className="flex items-center gap-2 mb-2.5 px-0.5">
         <Radio size={13} className={cron.running ? "animate-flicker" : ""} style={{ color: cron.running ? "var(--gold)" : "var(--ok)" }} />
         <span className="eyebrow">Live conversations</span>
+        <span className="mono text-[9.5px] text-faint">· {live.length} active</span>
         {cron.running && <span className="mono text-[9.5px]" style={{ color: "var(--gold)" }}>· simulation on · new goal {cron.remaining.toFixed(0)}s</span>}
       </div>
       <div className="flex flex-col gap-2.5">
-        {order.map((cid) => <ConversationCard key={cid} cid={cid} />)}
+        {live.map((cid) => <ConversationCard key={cid} cid={cid} />)}
       </div>
     </div>
   );
@@ -171,6 +179,12 @@ function MsgRow({ m, agents, nameOf }: { m: ChatMessage; agents: any; nameOf: (i
         <span className="text-[10.5px] text-muted truncate max-w-[150px]">{recip}</span>
         {m.intent && <IntentChip tag={m.intent.purpose_tag} compact />}
       </div>
+      {m.thinking && (
+        <div className="flex items-start gap-1 mb-1 text-[10.5px] italic leading-snug" style={{ color: "var(--violet)" }} title="the agent's reasoning before this message (real Mistral)">
+          <span className="shrink-0">💭</span>
+          <span>{m.thinking}</span>
+        </div>
+      )}
       <div className="text-[11.5px] leading-snug" style={{ color: "var(--text-2)" }}>{m.text}</div>
     </div>
   );

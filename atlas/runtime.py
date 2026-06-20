@@ -19,6 +19,7 @@ from atlas.hitl import HitlQueue
 from atlas.llm import LLMProvider, get_provider
 from atlas.metrics import MetricsCollector
 from atlas.org.generator import OrgSnapshot, generate_org
+from atlas.trace import TraceCollector
 
 
 @dataclass
@@ -36,6 +37,7 @@ class Runtime:
     router: Router
     orchestrator: Orchestrator
     cron: CronSimulator
+    trace: TraceCollector
     tasks: dict[str, Task]
 
 
@@ -56,6 +58,7 @@ def build_runtime(
     hitl = HitlQueue(broker)
     threads = ThreadStore()
     groups = GroupStore()
+    trace = TraceCollector(broker)
     llm = llm if llm is not None else get_provider(settings, broker=broker)
     orchestrator = Orchestrator(
         snapshot=snapshot,
@@ -67,6 +70,7 @@ def build_runtime(
         threads=threads,
         groups=groups,
         llm=llm,
+        trace=trace,
         hitl_timeout=settings.hitl_timeout_seconds,
         step_delay=0.45 if step_delay is None else step_delay,
         cron_max_inflight=settings.cron_max_inflight,
@@ -88,5 +92,6 @@ def build_runtime(
         router=router,
         orchestrator=orchestrator,
         cron=cron,
+        trace=trace,
         tasks=tasks,
     )

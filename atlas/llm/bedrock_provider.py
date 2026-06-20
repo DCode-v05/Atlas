@@ -269,6 +269,19 @@ class BedrockProvider(LLMProvider):
             return None
         return await self._chat(self.phrasing_model, _SYS, prompt, max_tokens=90, temperature=0.8)
 
+    async def think(self, kind: str, ctx: dict) -> Optional[str]:
+        """The agent's brief private reasoning BEFORE it acts — a real Mistral call."""
+        situation = self._phrase_prompt(kind, ctx)
+        if situation is None:
+            return None
+        system = (
+            "You are an employee-agent. Before you send a message, think to yourself: in ONE short "
+            "first-person sentence, your private reasoning for this step — what you need and why. "
+            "No greeting, no quotes, no preamble — just the thought."
+        )
+        user = f"You are about to: {situation}\nYour brief reasoning first:"
+        return await self._chat(self.phrasing_model, system, user, max_tokens=44, temperature=0.5)
+
     @staticmethod
     def _phrase_prompt(kind: str, ctx: dict) -> Optional[str]:
         g = ctx.get
@@ -302,7 +315,27 @@ class BedrockProvider(LLMProvider):
                 f"You contacted colleagues — {g('shared')} shared, {g('redacted')} redacted, "
                 f"{g('denied')} withheld, {g('hitl')} sent for approval. One concise sentence."
             )
+        if kind == "greeting":
+            return f"You are {g('agent')}. A colleague just messaged: \"{g('prompt')}\". Reply in one short, warm, natural sentence."
         return None
+
+    # ── routing: choose from the FULL directory (reasoning model) ───────────
+    async def route(self, prompt: str, directory: str) -> Optional[str]:
+        """Pick the single best-fit employee for a task by reading the WHOLE
+        company directory (every agent's card) — no deterministic shortlist.
+        Returns the chosen agent id, or None if it can't decide."""
+        system = (
+            "You are the dispatcher for a software company. Read the full employee directory and "
+            "the incoming task, then choose the SINGLE best-fit employee to own it — match the task "
+            "to the person's role, department, and skills, and prefer seniority for strategy/approval "
+            "work. Reply with ONLY that employee's id (for example AGT-042), nothing else."
+        )
+        user = f'Incoming task: "{prompt}"\n\nEmployee directory:\n{directory}\n\nBest-fit employee id:'
+        out = await self._chat(self.reasoning_model, system, user, max_tokens=16, temperature=0.0)
+        if not out:
+            return None
+        m = re.search(r"AGT-\d+", out.upper())
+        return m.group(0) if m else None
 
     # ── routing re-rank (reasoning model) ──────────────────────────────────
     async def rerank(self, prompt: str, candidate_ids: list[str], blurbs: dict[str, str]) -> Optional[str]:
@@ -322,11 +355,15 @@ class BedrockProvider(LLMProvider):
     # ── org-scope gate (semantic) ──────────────────────────────────────────
     async def judge_scope(self, prompt: str, *, org_summary: str) -> Optional[bool]:
         system = (
-            "You are the intake gate for an internal company assistant. Admit a request ONLY if it "
-            "is about THIS company's own people, teams, projects, products, internal data, or "
-            "day-to-day operations. A request that merely names a technology but is generic work "
-            "unrelated to the company (for example 'write a python script to generate wifi passwords', "
-            "or 'weather in Paris') is OUT of scope. Reply with ONLY one word: IN or OUT."
+            "You are the intake gate for an internal company workspace where AI agents act like "
+            "employees. Reply IN to admit, OUT to block.\n"
+            "Admit (IN): greetings and pleasantries (hi, hello, good morning, thanks), light meta "
+            "requests (can you help, what can you do), AND any request about THIS company — its "
+            "people, teams, projects, products, internal data, or day-to-day operations.\n"
+            "Block (OUT): only requests ABOUT topics unrelated to the company — e.g. the weather, "
+            "sports, news, cooking or recipes, or a generic technical task with nothing to do with "
+            "the company (like 'write a python script to generate wifi passwords').\n"
+            "Reply with ONLY one word: IN or OUT."
         )
         user = f'Company: {org_summary}\n\nRequest: "{prompt}"\n\nIN or OUT?'
         out = await self._chat(self.reasoning_model, system, user, max_tokens=4, temperature=0.0)
@@ -336,6 +373,29 @@ class BedrockProvider(LLMProvider):
         if not m:
             return None
         return m.group(1) == "in"
+
+    # ── group coordination decision ────────────────────────────────────────
+    async def judge_group(self, prompt: str, roster: list[tuple[str, str, str]]) -> Optional[list[str]]:
+        """Decide whether a task needs team coordination, and with which teammates
+        (a subset of the REAL roster handed in — the model never invents people).
+        Returns None (undecided → caller falls back), [] (handle solo / 1:1), or a
+        list of agent ids to coordinate as a group."""
+        if not roster:
+            return None
+        lines = "\n".join(f"- {rid}: {name}, {role}" for rid, name, role in roster)
+        system = (
+            "You decide how an employee should handle a task: alone (one-to-one), or by pulling a "
+            "small group of teammates into a coordinated discussion. Reply 'SOLO' if it does not need "
+            "group coordination. Otherwise reply 'GROUP:' followed by a comma-separated list of the "
+            "teammate ids (only from the list given) who should be involved."
+        )
+        user = f'Task: "{prompt}"\n\nYour teammates:\n{lines}\n\nSOLO or GROUP: <ids>?'
+        out = await self._chat(self.reasoning_model, system, user, max_tokens=80, temperature=0.0)
+        if not out:
+            return None
+        if "group" not in out.lower():
+            return []  # solo / 1:1
+        return [rid for rid, _, _ in roster if rid in out]  # subset (may be empty → solo)
 
     # ── share judgement (tighten-only) ─────────────────────────────────────
     async def reason_share(
@@ -381,3 +441,55 @@ class BedrockProvider(LLMProvider):
         rm = re.search(r"reason\s*[:=]\s*(.+)", text, re.IGNORECASE)
         reason = (rm.group(1).strip() if rm else text.strip())[:240]
         return outcome, f"(LLM review) {reason}"
+
+    # ── full share decision (the owner agent decides — no deterministic matrix) ──
+    async def decide_share(
+        self,
+        *,
+        requester: OrgProfile,
+        owner: OrgProfile,
+        item: ContextItem,
+        intent: Intent,
+    ) -> Optional[tuple[ShareOutcome, str]]:
+        """The OWNER agent decides whether to share its own data with a colleague —
+        the model's own judgement, no rule matrix. Returns (outcome, reason) or None."""
+        system = (
+            "You are an employee-agent who OWNS a piece of internal company data, and a colleague is "
+            "asking you for it. Decide, like a thoughtful and security-conscious employee, whether to:\n"
+            "  SHARE   — hand it over in full,\n"
+            "  REDACT  — share only a safe summary, holding back the sensitive specifics,\n"
+            "  DENY    — refuse, because it's outside their need-to-know,\n"
+            "  ESCALATE— ask the human operator to approve first (for the most sensitive cases).\n"
+            "Weigh the data's sensitivity, the requester's role / department / clearance / teams / "
+            "projects, and whether their stated reason genuinely needs it. Use your own judgement. "
+            "Reply on two lines:\nOUTCOME: <share|redact|deny|escalate>\nREASON: <one short sentence>"
+        )
+        user = (
+            f"You are {owner.role_title} in {owner.department.value}.\n"
+            f"Requester: {requester.role_title} in {requester.department.value} "
+            f"(clearance {requester.clearance}, teams={requester.teams}, projects={requester.projects}).\n"
+            f"Your data: '{item.title}' — sensitivity={item.sensitivity.value}, scope={item.scope.value}"
+            f"{('/' + item.scope_ref) if item.scope_ref else ''}, min_clearance={item.min_clearance}.\n"
+            f"Their stated reason: purpose={intent.purpose_tag.value}, declared_scope={intent.declared_scope.value}, "
+            f'motivation="{intent.motivation}".\n'
+            f"Your decision?"
+        )
+        text = await self._chat(self.reasoning_model, system, user, max_tokens=120, temperature=0.2)
+        if not text:
+            return None
+        low = text.lower()
+        outcome: Optional[ShareOutcome] = None
+        m = re.search(r"outcome\s*[:=]\s*(share|redact|escalate|deny)", low)
+        if m:
+            outcome = _OUTCOME_WORDS[m.group(1)]
+        else:
+            for word, mapped in (("escalate", ShareOutcome.ESCALATE), ("deny", ShareOutcome.DENY),
+                                 ("redact", ShareOutcome.REDACT), ("share", ShareOutcome.SHARE)):
+                if word in low:
+                    outcome = mapped
+                    break
+        if outcome is None:
+            return None
+        rm = re.search(r"reason\s*[:=]\s*(.+)", text, re.IGNORECASE)
+        reason = (rm.group(1).strip() if rm else text.strip())[:240]
+        return outcome, reason

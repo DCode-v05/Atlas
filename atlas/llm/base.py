@@ -25,11 +25,23 @@ class LLMProvider:
     async def phrase(self, kind: str, ctx: dict) -> Optional[str]:  # pragma: no cover
         ...
 
+    async def think(self, kind: str, ctx: dict) -> Optional[str]:  # pragma: no cover
+        """The agent's brief reasoning before it speaks, or None."""
+        return None
+
     async def rerank(self, prompt: str, candidate_ids: list[str], blurbs: dict[str, str]) -> Optional[str]:  # pragma: no cover
         ...
 
+    async def route(self, prompt: str, directory: str) -> Optional[str]:  # pragma: no cover
+        """Choose the best-fit agent id from the full directory, or None."""
+        return None
+
     async def judge_scope(self, prompt: str, *, org_summary: str) -> Optional[bool]:  # pragma: no cover
         """Is this prompt about the company? True=in, False=out, None=can't decide."""
+        return None
+
+    async def judge_group(self, prompt: str, roster) -> Optional[list]:  # pragma: no cover
+        """Coordinate as a group? None=undecided, []=solo, [ids]=group members."""
         return None
 
     async def reason_share(
@@ -42,3 +54,14 @@ class LLMProvider:
         base_outcome: ShareOutcome,
     ) -> Optional[tuple[ShareOutcome, str]]:  # pragma: no cover
         ...
+
+    async def decide_share(
+        self,
+        *,
+        requester: OrgProfile,
+        owner: OrgProfile,
+        item: ContextItem,
+        intent: Intent,
+    ) -> Optional[tuple[ShareOutcome, str]]:  # pragma: no cover
+        """The owner agent's full share decision (no matrix). Returns (outcome, reason) or None."""
+        return None

@@ -35,6 +35,7 @@ class EventType(str, Enum):
     CRON_TICK = "cron.tick"
     CRON_STATE = "cron.state"
     LLM_STATUS = "llm.status"
+    TRACE_SPAN = "trace.span"  # one observable agent operation (LLM call or policy step)
 
 
 #: Stable, ordered list of every event type — mirrored by the frontend.
@@ -133,9 +134,24 @@ class MessageSentPayload(BaseModel):
     mode: str  # individual | group
     role: str  # user | agent
     text: str
+    thinking: Optional[str] = None  # the agent's reasoning before it spoke (real Mistral or absent)
     intent: Optional[IntentView] = None
     thread_id: Optional[str] = None
     group_id: Optional[str] = None
+
+
+class TraceSpanPayload(BaseModel):
+    """One observable operation an agent performed — the building block of the
+    thinking layer and the agent-inspection trace."""
+
+    span_id: str
+    ts: str
+    agent_id: str
+    context_id: Optional[str] = None
+    kind: str  # route | think | judge_scope | judge_group | phrase | reason_share | policy
+    summary: str
+    live: bool = False  # True = a real Bedrock/Mistral call; False = deterministic / fallback
+    detail: Optional[str] = None
 
 
 class ContextSharePayload(BaseModel):

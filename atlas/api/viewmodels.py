@@ -77,9 +77,26 @@ def agent_card_view(rt, agent_id: str) -> dict:
             for it in ag.owned_items.values()
         ],
         "learned_count": len(ag.learned),
+        "learned": [
+            {
+                "item_id": f.item_id,
+                "title": f.title,
+                "sensitivity": f.sensitivity.value,
+                "redacted": f.redacted,  # True = only ever saw the safe summary
+                "source": f.source_agent_id,
+                "source_name": _name_of(rt, f.source_agent_id),
+            }
+            for f in ag.learned.values()
+        ],
+        "trace": [s.model_dump(mode="json") for s in rt.trace.for_agent(agent_id, limit=60)],
         "manager": ag.profile.reports_to,
         "manages": ag.profile.manages,
     }
+
+
+def _name_of(rt, agent_id: str) -> str:
+    ag = rt.registry.agents.get(agent_id)
+    return ag.name if ag else agent_id
 
 
 def thread_view(rt, context_id: str) -> dict:

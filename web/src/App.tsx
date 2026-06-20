@@ -1,7 +1,8 @@
-import { MessagesSquare, Network, LayoutGrid, Boxes } from "lucide-react";
+import { MessagesSquare, Network, LayoutGrid, Boxes, History } from "lucide-react";
 import { TopBar } from "./components/TopBar";
 import { TeamsPanel } from "./components/TeamsPanel";
 import { ConversationTimeline } from "./components/ConversationTimeline";
+import { HistoryView } from "./components/HistoryView";
 import { CommsGraph } from "./components/CommsGraph";
 import { CardGrid } from "./components/CardGrid";
 import { ProjectsWorkspace } from "./components/ProjectsWorkspace";
@@ -14,6 +15,7 @@ import { useStore } from "./store";
 
 const TABS = [
   { id: "convo", label: "Conversation", icon: MessagesSquare },
+  { id: "history", label: "History", icon: History },
   { id: "network", label: "Network", icon: Network },
   { id: "roster", label: "Roster", icon: LayoutGrid },
   { id: "projects", label: "Projects", icon: Boxes },
@@ -48,11 +50,12 @@ function CenterStage() {
             </button>
           );
         })}
-        <span className="ml-auto eyebrow pr-1">{view === "convo" ? "live agent-to-agent" : view === "network" ? "comms topology" : view === "projects" ? "cross-team workspace" : "100 agents"}</span>
+        <span className="ml-auto eyebrow pr-1">{view === "convo" ? "live agent-to-agent" : view === "history" ? "completed goals" : view === "network" ? "comms topology" : view === "projects" ? "cross-team workspace" : "100 agents"}</span>
       </div>
 
       <div className="flex-1 min-h-0 relative">
         {view === "convo" && <ConversationTimeline />}
+        {view === "history" && <HistoryView />}
         {view === "network" && <CommsGraph />}
         {view === "roster" && <CardGrid />}
         {view === "projects" && <ProjectsWorkspace />}
