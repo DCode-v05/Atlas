@@ -31,7 +31,7 @@ async def test_org_endpoint_has_100_agents(client):
     data = (await c.get("/api/org")).json()
     assert data["node_count"] == 100
     assert len(data["reporting_edges"]) == 99  # everyone but the CEO reports to someone
-    assert data["llm"] == "offline"  # the injected test provider (prod = "groq")
+    assert data["llm"] == "fake"  # the injected test double (prod = real "bedrock")
 
 
 async def test_org_endpoint_exposes_per_agent_goal(client):

@@ -108,21 +108,25 @@ export function TopBar() {
 }
 
 function LlmPill({ llm }: { llm: any }) {
+  const errored = !!llm?.errored;
   const throttled = !!llm?.throttled;
   const offline = llm?.provider === "offline";
-  const color = offline ? "var(--faint)" : throttled ? "var(--gold)" : "var(--ok)";
+  const color = errored ? "var(--coral)" : offline ? "var(--faint)" : throttled ? "var(--gold)" : "var(--ok)";
   const prov = (llm?.provider ?? "llm").toUpperCase();
-  const label = throttled ? "THROTTLED" : prov;
+  const label = errored ? "LLM ERROR" : throttled ? "THROTTLED" : prov;
+  const alert = errored || throttled;
+  const accent = errored ? "var(--coral)" : "var(--gold)";
+  const bg = errored ? "rgba(209,42,58,0.08)" : "rgba(194,104,10,0.08)";
   const title = llm
-    ? `${prov} — ok ${llm.calls_ok} · paced ${llm.calls_throttled} · 429 ${llm.calls_429}${llm.reason ? `\n${llm.reason}` : ""}`
+    ? `${prov} — ok ${llm.calls_ok} · paced ${llm.calls_throttled} · 429 ${llm.calls_429} · errors ${llm.calls_error ?? 0}${llm.reason ? `\n${llm.reason}` : ""}`
     : "LLM status";
   return (
     <div
       className="shrink-0 hidden sm:flex items-center gap-1.5 h-10 px-2.5 rounded-md"
-      style={{ border: `1px solid ${throttled ? "var(--gold)" : "var(--border)"}`, background: throttled ? "rgba(194,104,10,0.08)" : "var(--surface)" }}
+      style={{ border: `1px solid ${alert ? accent : "var(--border)"}`, background: alert ? bg : "var(--surface)" }}
       title={title}
     >
-      <Cpu size={13} color={color} className={throttled ? "animate-flicker" : ""} />
+      <Cpu size={13} color={color} className={alert ? "animate-flicker" : ""} />
       <span className="mono text-[9.5px] uppercase tracking-wide" style={{ color }}>{label}</span>
     </div>
   );

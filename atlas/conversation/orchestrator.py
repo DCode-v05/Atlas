@@ -24,7 +24,6 @@ from atlas.a2a.models import Artifact, TaskState, TextPart
 from atlas.bus.discovery import tokenize
 from atlas.bus.registry import AgentRegistry
 from atlas.bus.router import GATE_REASON, Router
-from atlas.conversation import phrasing
 from atlas.conversation.intent import build_request_intent, coordination_intent
 from atlas.conversation.stores import GroupStore, ThreadStore
 from atlas.events import (
@@ -226,19 +225,19 @@ class Orchestrator:
         await self._pause()
         summary = await self._say(
             "summary",
-            phrasing.final_summary(agent.name, prompt, m.items_shared, m.items_redacted, m.items_denied, m.hitl_escalations),
             {"agent": agent.name, "prompt": prompt, "shared": m.items_shared, "redacted": m.items_redacted,
              "denied": m.items_denied, "hitl": m.hitl_escalations},
         )
-        self.broker.emit(
-            EventType.MESSAGE_SENT,
-            MessageSentPayload(
-                message_id=new_id("msg-"), context_id=context_id, sender=agent.id,
-                recipients=[USER_NODE], mode=CoordinationMode.INDIVIDUAL.value, role="agent", text=summary,
-            ),
-            context_id=context_id,
-        )
-        task.artifacts.append(Artifact(name="summary", parts=[TextPart(text=summary)]))
+        if summary:  # omit the closing message if the LLM couldn't author it
+            self.broker.emit(
+                EventType.MESSAGE_SENT,
+                MessageSentPayload(
+                    message_id=new_id("msg-"), context_id=context_id, sender=agent.id,
+                    recipients=[USER_NODE], mode=CoordinationMode.INDIVIDUAL.value, role="agent", text=summary,
+                ),
+                context_id=context_id,
+            )
+            task.artifacts.append(Artifact(name="summary", parts=[TextPart(text=summary)]))
         self.router.set_task_state(task, TaskState.COMPLETED, message=summary)
         self.router.set_status(agent.id, AgentStatus.IDLE)
         self.metrics.emit(context_id)
@@ -292,16 +291,14 @@ class Orchestrator:
 
             self.router.set_status(owner.id, AgentStatus.THINKING)
             await self._pause()
-            ask = await self._say(
+            msg = await self._send_say(
                 "request",
-                phrasing.request_text(agent.name, owner.name, item.title, intent.motivation),
                 {"requester": agent.name, "owner": owner.name, "item": item.title, "motivation": intent.motivation},
+                context_id=context_id, sender=agent.id, recipients=[owner.id], intent=intent,
+                thread_id=thread.thread_id, task=task,
             )
-            msg = self.router.send_message(
-                context_id=context_id, sender=agent.id, recipients=[owner.id], text=ask,
-                intent=intent, mode=CoordinationMode.INDIVIDUAL, thread_id=thread.thread_id, task=task,
-            )
-            thread.message_ids.append(msg.messageId)
+            if msg:
+                thread.message_ids.append(msg.messageId)
 
             manages = self.snapshot.manages_transitively(agent.id, owner.id)
             decision = evaluate_share(agent.profile, owner.profile, item, intent, requester_manages_owner=manages)
@@ -333,26 +330,27 @@ class Orchestrator:
         self.router.set_status(owner.id, AgentStatus.SPEAKING)
         await self._pause(0.5)
         names = {"owner": owner.name, "requester": agent.name, "item": item.title}
+        # The decision + its effects (remember / metrics / context event) are
+        # deterministic and always recorded; only the spoken reply depends on the
+        # LLM and is omitted if it can't be authored.
         if out == ShareOutcome.SHARE:
             body = decision.delivered_body or ""
-            reply = await self._say_payload("reply_share", phrasing.share_reply(item.title, body), {**names, "body": body}, body)
             agent.remember(LearnedFact(item.item_id, item.title, body, item.sensitivity, False, owner.id))
             self.metrics.record_hop(context_id, owner.id)
             self._emit_context(EventType.CONTEXT_SHARED, context_id, item, owner, agent, decision)
+            await self._send_say("reply_share", {**names, "body": body}, context_id=context_id, sender=owner.id,
+                                 recipients=to, mode=mode, thread_id=thread_id, group_id=group_id, task=task, payload=body)
         elif out == ShareOutcome.REDACT:
             body = decision.delivered_body or ""
-            reply = await self._say_payload("reply_redact", phrasing.redact_reply(item.title, body), {**names, "summary": body}, body)
             agent.remember(LearnedFact(item.item_id, item.title, body, item.sensitivity, True, owner.id))
             self.metrics.record_hop(context_id, owner.id)
             self._emit_context(EventType.CONTEXT_REDACTED, context_id, item, owner, agent, decision, summary=body)
+            await self._send_say("reply_redact", {**names, "summary": body}, context_id=context_id, sender=owner.id,
+                                 recipients=to, mode=mode, thread_id=thread_id, group_id=group_id, task=task, payload=body)
         else:  # DENY
-            reply = await self._say("reply_deny", phrasing.deny_reply(item.title), names)
             self._emit_context(EventType.CONTEXT_DENIED, context_id, item, owner, agent, decision)
-
-        self.router.send_message(
-            context_id=context_id, sender=owner.id, recipients=to, text=reply,
-            mode=mode, thread_id=thread_id, group_id=group_id, task=task,
-        )
+            await self._send_say("reply_deny", names, context_id=context_id, sender=owner.id,
+                                 recipients=to, mode=mode, thread_id=thread_id, group_id=group_id, task=task)
 
     async def _handle_hitl(
         self, decision, agent: OrgAgent, owner: OrgAgent, item: ContextItem, intent: Intent,
@@ -364,11 +362,8 @@ class Orchestrator:
         to = recipients or [agent.id]
         names = {"owner": owner.name, "requester": agent.name, "item": item.title}
         self.router.set_status(owner.id, AgentStatus.WAITING_HITL)
-        notice = await self._say("escalate", phrasing.escalate_notice(item.title), names)
-        self.router.send_message(
-            context_id=context_id, sender=owner.id, recipients=to, text=notice,
-            mode=mode, thread_id=thread_id, group_id=group_id, task=task,
-        )
+        await self._send_say("escalate", names, context_id=context_id, sender=owner.id,
+                             recipients=to, mode=mode, thread_id=thread_id, group_id=group_id, task=task)
         req = HitlRequest(
             task_id=task_id, context_id=context_id, owner_agent_id=owner.id, requester_agent_id=agent.id,
             item_id=item.item_id, item_title=item.title, intent=intent, proposed_outcome=ShareOutcome.SHARE,
@@ -390,22 +385,20 @@ class Orchestrator:
             self.metrics.record_resolution(context_id, ShareOutcome.REDACT)
             self.metrics.record_hop(context_id, owner.id)
             self._emit_context(EventType.CONTEXT_REDACTED, context_id, item, owner, agent, decision, summary=body, rule="HITL-REDACT")
-            reply = await self._say_payload("hitl_redact", phrasing.hitl_approved_redact_reply(item.title, body), {**names, "summary": body}, body)
+            await self._send_say("hitl_redact", {**names, "summary": body}, context_id=context_id, sender=owner.id,
+                                 recipients=to, mode=mode, thread_id=thread_id, group_id=group_id, task=task, payload=body)
         elif resolved.state == "approved":
             agent.remember(LearnedFact(item.item_id, item.title, item.body, item.sensitivity, False, owner.id))
             self.metrics.record_resolution(context_id, ShareOutcome.SHARE)
             self.metrics.record_hop(context_id, owner.id)
             self._emit_context(EventType.CONTEXT_SHARED, context_id, item, owner, agent, decision, rule="HITL-APPROVE")
-            reply = await self._say_payload("hitl_share", phrasing.hitl_approved_reply(item.title, item.body), {**names, "body": item.body}, item.body)
+            await self._send_say("hitl_share", {**names, "body": item.body}, context_id=context_id, sender=owner.id,
+                                 recipients=to, mode=mode, thread_id=thread_id, group_id=group_id, task=task, payload=item.body)
         else:
             self.metrics.record_resolution(context_id, ShareOutcome.DENY)
             self._emit_context(EventType.CONTEXT_DENIED, context_id, item, owner, agent, decision, rule="HITL-DENY")
-            reply = await self._say("hitl_deny", phrasing.hitl_denied_reply(item.title), names)
-
-        self.router.send_message(
-            context_id=context_id, sender=owner.id, recipients=to, text=reply,
-            mode=mode, thread_id=thread_id, group_id=group_id, task=task,
-        )
+            await self._send_say("hitl_deny", names, context_id=context_id, sender=owner.id,
+                                 recipients=to, mode=mode, thread_id=thread_id, group_id=group_id, task=task)
         self.router.set_status(owner.id, AgentStatus.IDLE)
 
     async def _consult_manager(self, agent: OrgAgent, prompt: str, context_id: str, task_id: str) -> None:
@@ -420,24 +413,17 @@ class Orchestrator:
             self.router.announce_thread(thread)
         self.router.set_status(mgr_id, AgentStatus.THINKING)
         await self._pause()
-        consult = await self._say(
-            "manager_consult", phrasing.manager_consult(agent.name, mgr.name, topic),
-            {"requester": agent.name, "manager": mgr.name, "topic": topic},
-        )
-        self.router.send_message(
-            context_id=context_id, sender=agent.id, recipients=[mgr_id], text=consult,
-            intent=coordination_intent(topic), mode=CoordinationMode.INDIVIDUAL, thread_id=thread.thread_id, task=task,
+        await self._send_say(
+            "manager_consult", {"requester": agent.name, "manager": mgr.name, "topic": topic},
+            context_id=context_id, sender=agent.id, recipients=[mgr_id],
+            intent=coordination_intent(topic), thread_id=thread.thread_id, task=task,
         )
         self.metrics.record_hop(context_id, mgr_id)
         self.router.set_status(mgr_id, AgentStatus.SPEAKING)
         await self._pause(0.5)
-        guidance = await self._say(
-            "manager_reply", f"{mgr.name}: sure — here's some guidance on {topic}. Keep specifics within the team.",
-            {"manager": mgr.name, "requester": agent.name, "topic": topic},
-        )
-        self.router.send_message(
-            context_id=context_id, sender=mgr_id, recipients=[agent.id], text=guidance,
-            mode=CoordinationMode.INDIVIDUAL, thread_id=thread.thread_id, task=task,
+        await self._send_say(
+            "manager_reply", {"manager": mgr.name, "requester": agent.name, "topic": topic},
+            context_id=context_id, sender=mgr_id, recipients=[agent.id], thread_id=thread.thread_id, task=task,
         )
         self.router.set_status(mgr_id, AgentStatus.IDLE)
 
@@ -455,28 +441,26 @@ class Orchestrator:
         others = [m for m in members if m != agent.id]
         for m in others:
             self.router.set_status(m, AgentStatus.THINKING)
-        opening_text = await self._say(
-            "group_open", phrasing.group_opening(agent.name, topic), {"initiator": agent.name, "topic": topic}
-        )
-        opening = self.router.send_message(
-            context_id=context_id, sender=agent.id, recipients=others, text=opening_text,
+        opening = await self._send_say(
+            "group_open", {"initiator": agent.name, "topic": topic},
+            context_id=context_id, sender=agent.id, recipients=others,
             intent=coordination_intent(topic), mode=CoordinationMode.GROUP, group_id=group.group_id, task=task,
         )
-        group.message_ids.append(opening.messageId)
+        if opening:
+            group.message_ids.append(opening.messageId)
         await self._pause()
 
         for m in sorted(others):
             mem = self.registry.get(m)
             self.router.set_status(m, AgentStatus.SPEAKING)
             await self._pause(0.35)
-            reply_text = await self._say(
-                "group_reply", phrasing.group_reply(mem.name, topic), {"member": mem.name, "topic": topic}
-            )
-            reply = self.router.send_message(
+            reply = await self._send_say(
+                "group_reply", {"member": mem.name, "topic": topic},
                 context_id=context_id, sender=m, recipients=[x for x in members if x != m],
-                text=reply_text, mode=CoordinationMode.GROUP, group_id=group.group_id, task=task,
+                mode=CoordinationMode.GROUP, group_id=group.group_id, task=task,
             )
-            group.message_ids.append(reply.messageId)
+            if reply:
+                group.message_ids.append(reply.messageId)
             self.metrics.record_hop(context_id, m)
             self.router.set_status(m, AgentStatus.IDLE)
 
@@ -507,15 +491,13 @@ class Orchestrator:
         intent = build_request_intent(initiator.profile, item, task_ref=task_id)
         self.router.set_status(owner.id, AgentStatus.THINKING)
         await self._pause(0.4)
-        ask = await self._say(
-            "request", phrasing.request_text(initiator.name, owner.name, item.title, intent.motivation),
-            {"requester": initiator.name, "owner": owner.name, "item": item.title, "motivation": intent.motivation},
+        sent = await self._send_say(
+            "request", {"requester": initiator.name, "owner": owner.name, "item": item.title, "motivation": intent.motivation},
+            context_id=context_id, sender=initiator.id, recipients=[owner.id], intent=intent,
+            mode=CoordinationMode.GROUP, group_id=group.group_id, task=self.router.tasks[task_id],
         )
-        sent = self.router.send_message(
-            context_id=context_id, sender=initiator.id, recipients=[owner.id], text=ask,
-            intent=intent, mode=CoordinationMode.GROUP, group_id=group.group_id, task=self.router.tasks[task_id],
-        )
-        group.message_ids.append(sent.messageId)
+        if sent:
+            group.message_ids.append(sent.messageId)
         manages = self.snapshot.manages_transitively(initiator.id, owner.id)
         decision = evaluate_share(initiator.profile, owner.profile, item, intent, requester_manages_owner=manages)
         decision = await self._maybe_llm_tighten(decision, initiator, owner, item, intent)
@@ -540,24 +522,36 @@ class Orchestrator:
             context_id=context_id,
         )
 
-    async def _say(self, kind: str, template: str, ctx: dict) -> str:
-        """LLM-author the message when the provider is available; else the template."""
-        if self.llm.available:
-            try:
-                out = await self.llm.phrase(kind, ctx)
-                if out:
-                    return out
-            except Exception:
-                pass
-        return template
+    async def _say(self, kind: str, ctx: dict) -> Optional[str]:
+        """Real Mistral text for this message — or None if the LLM can't produce
+        it. Templates were removed: every agent message is genuine Mistral, or it
+        is omitted (never faked)."""
+        if not self.llm.available:
+            return None
+        try:
+            out = await self.llm.phrase(kind, ctx)
+            return out or None
+        except Exception:
+            return None
 
-    async def _say_payload(self, kind: str, template: str, ctx: dict, payload: str) -> str:
-        """Like _say, but guarantee the exact payload (secret body / summary) is
-        present — the LLM authors the prose, code ensures the value isn't lost."""
-        text = await self._say(kind, template, ctx)
+    async def _send_say(
+        self, kind: str, ctx: dict, *, context_id: str, sender: str, recipients: list[str], task,
+        mode: CoordinationMode = CoordinationMode.INDIVIDUAL, intent: Optional[Intent] = None,
+        thread_id: Optional[str] = None, group_id: Optional[str] = None, payload: Optional[str] = None,
+    ):
+        """Author the line with Mistral and send it. Returns the Message, or None
+        when the LLM couldn't produce text (the message is omitted — never
+        templated). A ``payload`` (a secret body/summary) is appended verbatim so
+        the exact value never depends on the model's wording."""
+        text = await self._say(kind, ctx)
+        if not text:
+            return None
         if payload and payload not in text:
             text = f"{text} {payload}"
-        return text
+        return self.router.send_message(
+            context_id=context_id, sender=sender, recipients=recipients, text=text,
+            intent=intent, mode=mode, thread_id=thread_id, group_id=group_id, task=task,
+        )
 
     async def _maybe_llm_tighten(self, decision, agent, owner, item, intent):
         if not self.llm.available:

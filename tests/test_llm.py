@@ -102,22 +102,52 @@ def test_token_bucket_caps_burst():
     assert taken <= 8  # capped near the burst, not 1000
 
 
-async def test_bedrock_proactive_throttle_skips_call_when_over_budget():
-    prov = _provider(rpm=1, burst=1)
-    called = {"n": 0}
+async def test_token_bucket_acquire_waits_then_grants():
+    import time as _t
+
+    b = _TokenBucket(rpm=600, burst=1)  # ~10 tokens/sec → ~0.1s per token
+    assert b.take() is True  # drain the burst token
+    t0 = _t.monotonic()
+    await b.acquire()  # pacing is now WAITING, not skipping
+    assert _t.monotonic() - t0 >= 0.05  # it waited for a refill rather than skipping
+
+
+async def test_bedrock_paces_by_waiting_then_makes_the_real_call():
+    # Templates are removed: when the bucket is drained, _chat WAITS for a token
+    # and still makes the real call — it never skips to a fallback.
+    prov = _provider(rpm=600, burst=1)
+    calls = {"n": 0}
 
     class _Client:
         @staticmethod
         def converse(**_):
-            called["n"] += 1
-            raise RuntimeError("API should not be called when throttled")
+            calls["n"] += 1
+            return {"output": {"message": {"content": [{"text": "on it, will sync in-thread"}]}}}
 
     prov.client = _Client()
-    assert prov._bucket(prov.phrasing_model).take() is True  # drain the single token
-    out = await prov.phrase("group_reply", {"member": "A", "topic": "x"})
-    assert out is None
-    assert prov.calls_throttled >= 1
-    assert called["n"] == 0  # never hit the API
+    prov._bucket("mistral.test").take()  # drain the single token
+    out = await prov._chat("mistral.test", "s", "u", max_tokens=10, temperature=0.0)
+    assert out == "on it, will sync in-thread"  # real call happened after the wait
+    assert calls["n"] == 1
+    assert prov.calls_ok == 1
+
+
+def test_every_message_kind_has_a_prompt():
+    # With no template fallback, a missing _phrase_prompt branch would silently
+    # drop that message forever — so every kind the orchestrator emits must map
+    # to a non-empty Mistral prompt.
+    kinds = [
+        "request", "reply_share", "reply_redact", "reply_deny", "escalate",
+        "hitl_share", "hitl_redact", "hitl_deny", "group_open", "group_reply",
+        "manager_consult", "manager_reply", "summary",
+    ]
+    ctx = {
+        "requester": "A", "owner": "B", "item": "X", "motivation": "m", "body": "v",
+        "summary": "s", "initiator": "I", "topic": "T", "member": "M", "manager": "Mg",
+        "agent": "Ag", "prompt": "p", "shared": 1, "redacted": 0, "denied": 0, "hitl": 0,
+    }
+    for k in kinds:
+        assert BedrockProvider._phrase_prompt(k, ctx), f"no Mistral prompt for message kind '{k}'"
 
 
 def test_get_provider_requires_credentials(monkeypatch):

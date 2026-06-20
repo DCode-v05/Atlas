@@ -133,10 +133,12 @@ export interface LlmStatusPayload {
   provider: string;
   available: boolean;
   throttled: boolean;
+  errored?: boolean;
   rpm: number;
   calls_ok: number;
   calls_throttled: number;
   calls_429: number;
+  calls_error?: number;
   reason: string;
 }
 

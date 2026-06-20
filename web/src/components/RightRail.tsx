@@ -1,4 +1,4 @@
-import { Zap } from "lucide-react";
+import { AlertTriangle, Zap } from "lucide-react";
 import { useStore } from "../store";
 import { DeptMiniMap } from "./DeptMiniMap";
 import { Brackets, SectionHead, toneColor } from "./ui";
@@ -18,13 +18,22 @@ export function RightRail() {
 
 function ThrottleBanner() {
   const llm = useStore((s) => s.llm);
-  if (!llm?.throttled) return null;
+  const errored = !!llm?.errored;
+  const throttled = !!llm?.throttled;
+  if (!errored && !throttled) return null;
+  const c = errored ? "var(--coral)" : "var(--gold)";
+  const bg = errored ? "rgba(209,42,58,0.07)" : "rgba(194,104,10,0.08)";
+  const Icon = errored ? AlertTriangle : Zap;
+  const title = errored ? "LLM unreachable — using templates" : "Bedrock rate-limited";
+  const detail = errored
+    ? (llm?.reason || "Bedrock calls are failing — messages fall back to deterministic templates.")
+    : (llm?.reason || "pacing calls to stay within limits");
   return (
-    <div className="mx-2.5 mb-1 rounded-md px-3 py-2 flex items-start gap-2 animate-slide-in" style={{ background: "rgba(194,104,10,0.08)", border: "1px solid var(--gold)" }}>
-      <Zap size={14} color="var(--gold)" className="animate-flicker shrink-0 mt-0.5" />
+    <div className="mx-2.5 mb-1 rounded-md px-3 py-2 flex items-start gap-2 animate-slide-in" style={{ background: bg, border: `1px solid ${c}` }}>
+      <Icon size={14} color={c} className="animate-flicker shrink-0 mt-0.5" />
       <div className="min-w-0">
-        <div className="text-[11px] font-semibold" style={{ color: "var(--gold)" }}>Bedrock rate-limited</div>
-        <div className="text-[10px] text-muted leading-snug">{llm.reason || "pacing calls to stay within limits"}</div>
+        <div className="text-[11px] font-semibold" style={{ color: c }}>{title}</div>
+        <div className="text-[10px] text-muted leading-snug">{detail}</div>
       </div>
     </div>
   );

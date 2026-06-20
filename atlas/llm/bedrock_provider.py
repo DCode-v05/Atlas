@@ -63,15 +63,32 @@ class _TokenBucket:
         self.tokens = self.capacity
         self.rate = rpm / 60.0
         self.t = time.monotonic()
+        self._lock = asyncio.Lock()
 
-    def take(self) -> bool:
+    def _refill(self) -> None:
         now = time.monotonic()
         self.tokens = min(self.capacity, self.tokens + (now - self.t) * self.rate)
         self.t = now
+
+    def take(self) -> bool:
+        self._refill()
         if self.tokens >= 1.0:
             self.tokens -= 1.0
             return True
         return False
+
+    async def acquire(self) -> None:
+        """Block until a token is available, then consume it. This is how pacing
+        becomes *waiting* — every real Mistral call waits its turn rather than
+        falling back to a template."""
+        while True:
+            async with self._lock:
+                self._refill()
+                if self.tokens >= 1.0:
+                    self.tokens -= 1.0
+                    return
+                wait = (1.0 - self.tokens) / self.rate if self.rate > 0 else 0.25
+            await asyncio.sleep(min(max(wait, 0.01), 5.0))
 
 
 class BedrockProvider(LLMProvider):
@@ -134,10 +151,12 @@ class BedrockProvider(LLMProvider):
         self._fail = 0
         self._disabled_until = 0.0
         self._throttled = False
+        self._errored = False
         self._last_error = ""
         self.calls_ok = 0
         self.calls_throttled = 0
         self.calls_429 = 0
+        self.calls_error = 0
 
     # ── status ─────────────────────────────────────────────────────────────
     @property
@@ -148,11 +167,13 @@ class BedrockProvider(LLMProvider):
         return {
             "provider": self.name,
             "available": self.available,
-            "throttled": self._throttled or not self.available,
+            "throttled": self._throttled,
+            "errored": self._errored,
             "rpm": self._rpm,
             "calls_ok": self.calls_ok,
             "calls_throttled": self.calls_throttled,
             "calls_429": self.calls_429,
+            "calls_error": self.calls_error,
         }
 
     def _emit(self, reason: str) -> None:
@@ -163,6 +184,14 @@ class BedrockProvider(LLMProvider):
     def _set_throttled(self, value: bool, reason: str) -> None:
         if value != self._throttled:
             self._throttled = value
+            self._emit(reason)
+
+    def _set_errored(self, value: bool, reason: str) -> None:
+        # Hard failures (bad creds / no model access / wrong region / validation)
+        # — surfaced immediately so the UI shows "LLM error" instead of pretending
+        # all is well while every message falls back to deterministic templates.
+        if value != self._errored:
+            self._errored = value
             self._emit(reason)
 
     def _bucket(self, model: str) -> _TokenBucket:
@@ -203,36 +232,35 @@ class BedrockProvider(LLMProvider):
         return resp["output"]["message"]["content"][0]["text"]
 
     async def _chat(self, model: str, system: str, user: str, *, max_tokens: int, temperature: float) -> Optional[str]:
-        if not self.available:  # in cooldown after throttling
-            self.calls_throttled += 1
+        if not self.available:  # in cooldown after a throttle / hard error
             return None
-        if not self._bucket(model).take():  # proactive self-pacing — no API call made
-            self.calls_throttled += 1
-            # Self-pacing is NOT an error state: don't flip the throttled flag
-            # (reserved for real Bedrock 429s / error cooldown). Excess messages
-            # just fall back to templates for this turn.
-            return None
+        # Pacing is now WAITING, not skipping: block until a token is free so this
+        # message is authored by real Mistral rather than a template.
+        await self._bucket(model).acquire()
         try:
             async with self._sem:
                 text = await asyncio.to_thread(self._converse, model, system, user, max_tokens, temperature)
             self.calls_ok += 1
             self._fail = 0
             self._set_throttled(False, "Bedrock recovered")
+            self._set_errored(False, "Bedrock recovered")
             return text.strip() if text else None
         except Exception as exc:
             if _is_throttle(exc):
                 self.calls_429 += 1
                 self._disabled_until = time.monotonic() + self._cooldown
                 self._set_throttled(True, "Bedrock throttled (rate limited) — backing off")
-                return None
+                return None  # this message is omitted; the cooldown paces the retry
             self._fail += 1
+            self.calls_error += 1
             self._last_error = f"{type(exc).__name__}: {exc}"[:240]
             if self._fail <= 3:  # surface the real cause (model access / region / creds)
                 print(f"[atlas.bedrock] Converse failed on '{model}': {self._last_error}", file=sys.stderr, flush=True)
-            if self._fail >= self._max_failures:
+            # surface the failure to the UI immediately (don't wait for the breaker)
+            self._set_errored(True, f"Bedrock error — {self._last_error}")
+            if self._fail >= self._max_failures:  # stop hammering a broken endpoint
                 self._disabled_until = time.monotonic() + self._cooldown
-                self._set_throttled(True, f"Bedrock error — {self._last_error}")
-            return None
+            return None  # hard error → message omitted (never a template)
 
     # ── per-message phrasing (fast model) ──────────────────────────────────
     async def phrase(self, kind: str, ctx: dict) -> Optional[str]:

@@ -197,8 +197,10 @@ class LlmStatusPayload(BaseModel):
     provider: str
     available: bool
     throttled: bool
+    errored: bool = False
     rpm: int
     calls_ok: int = 0
     calls_throttled: int = 0
     calls_429: int = 0
+    calls_error: int = 0
     reason: str = ""

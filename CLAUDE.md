@@ -127,12 +127,16 @@ worker thread since boto3 is sync). Two configurable Mistral model ids
 `mistral.mistral-large-2402-v1:0`). **AWS credentials are required — a Bedrock API
 key (`AWS_BEARER_TOKEN_BEDROCK`, bearer token) or classic access key/secret, plus a
 region; without them the app raises at startup.** Secret payloads are appended
-verbatim so the LLM can't drop them. Rate-limit safety: a **per-model token bucket
-with a small burst cap** (paces calls so a 100-agent cron burst can't storm Bedrock),
-concurrency limit, SDK retries off, and a self-healing cooldown on
-`ThrottlingException` — throttle state is emitted as an `llm.status` event. The
-`phrasing.py` templates remain only as a per-message safety net if a live call
-momentarily fails — not a mode, not a provider.
+verbatim so the LLM can't drop them. **There are NO templates: every agent message
+is authored by real Mistral, or it is omitted — never faked.** Rate-limit safety: a
+**per-model token bucket** that agents **wait on** (`acquire()` blocks until a token
+is free) so calls are paced to `ATLAS_BEDROCK_RPM` without storming Bedrock — pacing
+is *waiting for a real call*, not a fallback. Plus a concurrency limit, SDK retries
+off, and a self-healing cooldown on `ThrottlingException`. The provider surfaces
+**`throttled`** (rate-limited) and **`errored`** (auth/access/region failures) via the
+`llm.status` event, so the UI shows when conversations are degraded. Note: at a low
+`ATLAS_BEDROCK_RPM`, conversations pace slowly (each message waits its turn) — set it
+to your account's real quota.
 
 ---
 
@@ -155,7 +159,8 @@ cd web && npm install && npm run dev      # → http://localhost:5173 (proxies /
 **Tests:** `uv run pytest` (53 tests: org golden snapshot, exhaustive policy
 matrix + SECRET-cap invariant, orchestrator HITL flow, group need-to-know,
 LLM wiring + payload guard, Groq-key requirement, cron, API integration).
-Tests inject an offline LLM double, so they run without a key.
+Tests inject a fake LLM double (`tests/conftest.py`, `available=True`, authors
+deterministic text), so they run without a key — it is never used by the app.
 
 **Frontend typecheck:** `cd web && npm run typecheck`
 
