@@ -22,7 +22,7 @@ Two layers, never conflated:
 - **Internal bus** (`atlas/bus`): agent↔agent communication is in-process Python
   dispatch through a central **Router** that reproduces A2A method semantics
   (`message/send`, `tasks/get`, …). The Router is the single chokepoint where
-  discovery, the policy engine, metrics, and event emission are enforced — agents
+  discovery, need-to-know, metrics, and event emission are enforced — agents
   cannot bypass it. 100 agents live in one process, not 100 servers.
 
 Other invariants:
@@ -73,34 +73,36 @@ Core A2A types live in `atlas/a2a` (`AgentCard`, `Message`, `Part`, `Task` +
 
 ## The need-to-know decision
 
-**The OWNER agent (Mistral) decides** whether to share its own data —
-`llm.decide_share(requester, owner, item, intent)` returns `SHARE` / `REDACT` /
-`DENY` / `ESCALATE`(→HITL) from the model's own judgement, weighing sensitivity,
-the requester's role/clearance/teams/projects, and their stated reason. **There is
-NO deterministic matrix and NO secret floor in the live path** — the model may even
-share a secret if it judges the requester is entitled (the user's explicit choice).
-Every decision is a `decide_share` trace span (`live=True`).
+**Two layers — an LLM owner-decision under a deterministic compliance floor.**
 
-The deterministic policy engine below (`atlas/policy`, `evaluate_share`) survives
-**only as the offline fallback** — used (and traced `live=False`) when the LLM is
-genuinely unreachable, so the app still makes a safe decision without a key:
+**Layer 1 — the owner decides (LLM).** `llm.decide_share(requester, owner, item, intent)`
+returns `SHARE` / `REDACT` / `DENY` / `ESCALATE`(→HITL) from the model's own judgement,
+weighing sensitivity, the requester's role/clearance/teams/projects, and their stated reason.
+**No matrix makes this call** — the model may even choose to share a secret. If the owner's LLM
+is unreachable (no key / throttled / errored / unparseable), `_decide_share` does **not** decide
+in code — it **ESCALATEs to the human operator** (HITL, `rule_id="LLM-UNAVAILABLE"`). So the
+owner's primary decision is always the model's, or a person's — never a matrix's. Traced as a
+`decide_share` span (`live=True`).
 
-| Sensitivity | exact&legit | exact&weak | related | out/under-cleared | illegitimate |
-|---|---|---|---|---|---|
-| public | SHARE | SHARE | SHARE | SHARE | SHARE |
-| internal | SHARE | SHARE | SHARE | REDACT | DENY |
-| confidential | SHARE | REDACT | REDACT | DENY | DENY |
-| restricted | REDACT | ESCALATE | ESCALATE | DENY | DENY |
-| secret | ESCALATE | ESCALATE | DENY | DENY | DENY |
-
-Loosen-only overrides apply after the matrix (manager↔report `CHAIN1`, `CEO1`,
-security-incident `SEC1`), then a hard **SECRET cap**: a secret's loosest possible
-outcome is ESCALATE — no override ever leaks it. An optional Groq pass may only
-**tighten** the decision, never loosen it (the rule-based result is the floor).
+**Layer 2 — the deterministic Policy Engine (compliance review).** The owner's decision then
+passes through the **`atlas/policy` Policy Engine**, a **tighten-only ABAC** control that may
+**tighten** it (redact / escalate / deny) but never loosen — the auditable, codified compliance
+floor a real security/compliance function provides (it replaced the former LLM "Policy Officer"
+agent). ~11 single-action rules — clearance / no-read-up · need-to-know · least-privilege
+default-deny · PCI payment-secret · GDPR PII purpose+minimisation · HR-comp · SOX MNPI ·
+cross-department · secret four-eyes/SoD · officer self-review, each citing a named framework
+(NIST 800-53, PCI-DSS, GDPR, ISO 27001, Bell–LaPadula, XACML, AWS IAM) — are folded
+**most-restrictive-wins** over `SHARE < REDACT < ESCALATE < DENY`, seeded with the owner's
+decision (result ≥ owner's ⇒ tighten-only). Each review is a `policy_review` trace span
+(`live=False` — deterministic) attributed to the Security head (the compliance authority); a
+tighten re-stamps the decision `rule_id="POLICY/<rule>"`, and `policy_reviews` / `policy_overrides`
+are metered (the "Compliance" metric). The owner's *judgment* is the LLM's; the *floor* is the
+policy. (Skipped only on the LLM-unavailable path, which already goes to a human.) Full rule
+table + sources: `docs/policy.md`.
 
 ## How a prompt flows (`atlas/conversation/orchestrator.py`)
 
-**The judgment calls are LLM-decided; facts and the need-to-know policy are not.**
+**The judgment calls are LLM-decided — including the need-to-know decision; only facts (who-owns-what, team rosters) are not.**
 The **org-scope gate** is Mistral (lexical only as a fallback when the LLM is down):
 it admits company requests **and greetings/social pleasantries** (a bare "hi" routes
 to the CEO for a friendly reply), and blocks only non-company topics. **Grouping is
@@ -111,15 +113,17 @@ agent cards — id, name, role, dept, skills) and picks the owner; the determini
 skill-scorer survives only as a fallback for when the LLM is down.
 What stays deterministic by design: who-owns-what / team rosters (the routing directory
 itself is built from facts, but the *choice* is the LLM's; an LLM inventing who owns a
-secret would hallucinate private data), and the **need-to-know policy**
-(share/redact/deny/escalate) — the security core, where the LLM may only *tighten*,
-and ESCALATE goes to the human (HITL). The cron path skips the gate (goals are
-in-scope by construction).
+secret would hallucinate private data). The owner's need-to-know *decision*
+(share/redact/deny/escalate) is the OWNER agent's own LLM call — no matrix makes it; if
+the LLM is unreachable it ESCALATEs to the human (HITL) rather than being decided by code.
+A **deterministic Policy Engine** then *reviews* that decision (tighten-only) — the codified
+compliance floor (`atlas/policy`; see `docs/policy.md`). The cron path skips the gate
+(goals are in-scope by construction).
 
 ```
 prompt → org-scope gate (LLM-judged) → Level-1 route (→ best agent) → open Task →
   agent identifies context needs → Level-2 discovery (→ owners) →
-    for each owner: ask (with intent) → policy decides →
+    for each owner: ask (with intent) → owner LLM decides → Policy Engine reviews (tighten-only) →
       SHARE / REDACT / DENY / ESCALATE→HITL (task input-required, operator approves) →
     or form a GROUP session when Mistral decides to coordinate the team →
   finalize Task → metrics emitted
@@ -138,8 +142,8 @@ denied, redundant-contacts-avoided, HITL escalations, distinct agents contacted.
 ## LLM boundary (`atlas/llm`) — real Mistral on Amazon Bedrock, required
 
 `BedrockProvider` is the **only** provider and drives **both** the user-prompt and
-cron paths: it generates every agent message, re-ranks routing, and gives the
-tighten-only share judgement via the Bedrock **Converse API** (boto3, run in a
+cron paths: it generates every agent message, re-ranks routing, and makes the
+owner's need-to-know share decision via the Bedrock **Converse API** (boto3, run in a
 worker thread since boto3 is sync). Two configurable Mistral model ids
 (`ATLAS_BEDROCK_REASONING_MODEL` / `ATLAS_BEDROCK_PHRASING_MODEL`, default
 `mistral.mistral-large-2402-v1:0`). **AWS credentials are required — a Bedrock API
@@ -174,9 +178,9 @@ uv run python -m atlas                    # backend on :8000  (serves web/dist i
 cd web && npm install && npm run dev      # → http://localhost:5173 (proxies /api to :8000)
 ```
 
-**Tests:** `uv run pytest` (53 tests: org golden snapshot, exhaustive policy
-matrix + SECRET-cap invariant, orchestrator HITL flow, group need-to-know,
-LLM wiring + payload guard, Groq-key requirement, cron, API integration).
+**Tests:** `uv run pytest` (68 tests: org golden snapshot, orchestrator HITL flow,
+owner-LLM share decision + deterministic policy-engine rules, group need-to-know,
+LLM wiring + payload guard, Bedrock-credential requirement, cron, API integration).
 Tests inject a fake LLM double (`tests/conftest.py`, `available=True`, authors
 deterministic text), so they run without a key — it is never used by the app.
 
@@ -194,7 +198,7 @@ deterministic text), so they run without a key — it is never used by the app.
 
 ```
 atlas/   a2a/ (protocol)  org/ (company+generator)  bus/ (router/discovery)
-         policy/ (need-to-know)  conversation/ (orchestrator/threads/groups)
+         policy/ (deterministic compliance engine)  conversation/ (orchestrator/threads/groups)
          hitl/  cron/  llm/  metrics/  events/ (SSE schema = the FE contract)
          api/  store/  main.py  runtime.py  config.py
 web/     React + Vite + TS mission-control UI (force-graph, Zustand, SSE)

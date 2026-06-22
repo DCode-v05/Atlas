@@ -99,8 +99,7 @@ export const TRACE_KIND_META: Record<string, { color: string; label: string }> =
   judge_group: { color: "#9333ea", label: "Group?" },
   phrase: { color: "#0a8f5b", label: "Message" },
   decide_share: { color: "#b9710a", label: "Decide" },
-  reason_share: { color: "#b9710a", label: "Share review" },
-  policy: { color: "#5c6675", label: "Policy" },
+  policy_review: { color: "#d12a3a", label: "Compliance" },
 };
 
 export const LEVEL_LABEL: Record<number, string> = {

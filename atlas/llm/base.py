@@ -44,17 +44,6 @@ class LLMProvider:
         """Coordinate as a group? None=undecided, []=solo, [ids]=group members."""
         return None
 
-    async def reason_share(
-        self,
-        *,
-        requester: OrgProfile,
-        owner: OrgProfile,
-        item: ContextItem,
-        intent: Intent,
-        base_outcome: ShareOutcome,
-    ) -> Optional[tuple[ShareOutcome, str]]:  # pragma: no cover
-        ...
-
     async def decide_share(
         self,
         *,

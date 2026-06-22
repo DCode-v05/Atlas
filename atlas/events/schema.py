@@ -148,7 +148,7 @@ class TraceSpanPayload(BaseModel):
     ts: str
     agent_id: str
     context_id: Optional[str] = None
-    kind: str  # route | think | judge_scope | judge_group | phrase | reason_share | policy
+    kind: str  # route | think | judge_scope | judge_group | phrase | decide_share | policy_review
     summary: str
     live: bool = False  # True = a real Bedrock/Mistral call; False = deterministic / fallback
     detail: Optional[str] = None

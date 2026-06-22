@@ -50,7 +50,7 @@ gated), or hit **SIMULATE** to watch the org light up.
 
 Atlas runs **real Mistral on Amazon Bedrock on every path** — user prompts *and*
 the cron simulation. The LLM generates every agent message, re-ranks routing, and
-makes the (tighten-only) share-vs-redact judgement via the Bedrock **Converse API**.
+makes the owner's need-to-know share decision via the Bedrock **Converse API**.
 **There is no simulated mode**: set Bedrock credentials or the app exits with a clear
 error. Authenticate with a **Bedrock API key** (`AWS_BEARER_TOKEN_BEDROCK`) or classic
 AWS access key/secret, plus `AWS_REGION`. Model ids are configurable

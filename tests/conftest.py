@@ -34,9 +34,6 @@ class FakeLLM:
     async def route(self, prompt, directory):
         return None  # undecided → orchestrator falls back to the deterministic scorer
 
-    async def reason_share(self, **kwargs):
-        return None
-
     async def decide_share(self, *, requester, owner, item, intent):
         # stand-in for the owner agent's judgement: cautious by sensitivity.
         from atlas.org.ext_models import Sensitivity, ShareOutcome

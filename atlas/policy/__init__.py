@@ -1,25 +1,19 @@
-"""The need-to-know policy engine (the graded core)."""
+"""The deterministic compliance **Policy Engine**.
 
-from atlas.policy.engine import CONSERVATISM, evaluate_share, tighten_only
-from atlas.policy.rules import (
-    MATRIX,
-    Column,
-    IntentClass,
-    ScopeMatch,
-    classify_intent,
-    compute_scope_match,
-    select_column,
-)
+Codified need-to-know / least-privilege / segregation-of-duties / regulatory rules
+(`rules.py`) folded by a tighten-only most-restrictive-wins engine (`engine.py`). It
+reviews — and may tighten, never loosen — the owner agent's LLM share decision. Replaces
+the former LLM "Policy Officer" agent with an auditable, deterministic control.
+"""
+
+from atlas.policy.engine import PolicyEngine
+from atlas.policy.rules import CONSERVATISM, RULES, classify, in_scope, is_incident_responder
 
 __all__ = [
-    "evaluate_share",
-    "tighten_only",
+    "PolicyEngine",
+    "RULES",
     "CONSERVATISM",
-    "MATRIX",
-    "Column",
-    "ScopeMatch",
-    "IntentClass",
-    "select_column",
-    "compute_scope_match",
-    "classify_intent",
+    "classify",
+    "in_scope",
+    "is_incident_responder",
 ]

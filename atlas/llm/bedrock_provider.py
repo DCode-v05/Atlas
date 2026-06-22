@@ -397,51 +397,6 @@ class BedrockProvider(LLMProvider):
             return []  # solo / 1:1
         return [rid for rid, _, _ in roster if rid in out]  # subset (may be empty → solo)
 
-    # ── share judgement (tighten-only) ─────────────────────────────────────
-    async def reason_share(
-        self,
-        *,
-        requester: OrgProfile,
-        owner: OrgProfile,
-        item: ContextItem,
-        intent: Intent,
-        base_outcome: ShareOutcome,
-    ) -> Optional[tuple[ShareOutcome, str]]:
-        system = (
-            "You are a strict need-to-know reviewer for an internal company. You may only keep or "
-            "TIGHTEN the current recommendation, never loosen it. Reply on two lines:\n"
-            "OUTCOME: <share|redact|escalate|deny>\nREASON: <one short sentence>"
-        )
-        user = (
-            f"Requester: {requester.role_title} in {requester.department.value} "
-            f"(clearance {requester.clearance}, teams={requester.teams}, projects={requester.projects}).\n"
-            f"Owner: {owner.role_title} in {owner.department.value}.\n"
-            f"Item: '{item.title}' — sensitivity={item.sensitivity.value}, scope={item.scope.value}"
-            f"{('/' + item.scope_ref) if item.scope_ref else ''}, min_clearance={item.min_clearance}.\n"
-            f"Stated intent: purpose={intent.purpose_tag.value}, declared_scope={intent.declared_scope.value}, "
-            f'motivation="{intent.motivation}".\n'
-            f"Current recommendation: {base_outcome.value}. Should it be the same or more restricted?"
-        )
-        text = await self._chat(self.reasoning_model, system, user, max_tokens=120, temperature=0.2)
-        if not text:
-            return None
-        low = text.lower()
-        outcome: Optional[ShareOutcome] = None
-        m = re.search(r"outcome\s*[:=]\s*(share|redact|escalate|deny)", low)
-        if m:
-            outcome = _OUTCOME_WORDS[m.group(1)]
-        else:
-            for word, mapped in (("deny", ShareOutcome.DENY), ("escalate", ShareOutcome.ESCALATE),
-                                 ("redact", ShareOutcome.REDACT), ("share", ShareOutcome.SHARE)):
-                if word in low:
-                    outcome = mapped
-                    break
-        if outcome is None:
-            return None
-        rm = re.search(r"reason\s*[:=]\s*(.+)", text, re.IGNORECASE)
-        reason = (rm.group(1).strip() if rm else text.strip())[:240]
-        return outcome, f"(LLM review) {reason}"
-
     # ── full share decision (the owner agent decides — no deterministic matrix) ──
     async def decide_share(
         self,

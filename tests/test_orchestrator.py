@@ -76,9 +76,6 @@ class _ScopeLLM:
     async def rerank(self, prompt, candidate_ids, blurbs):
         return None
 
-    async def reason_share(self, **kwargs):
-        return None
-
     async def judge_scope(self, prompt, *, org_summary):
         return self._verdict
 
@@ -113,9 +110,6 @@ class _GateLLM:
         return f"[{kind}] hello there"
 
     async def rerank(self, prompt, ids, blurbs):
-        return None
-
-    async def reason_share(self, **kw):
         return None
 
     async def judge_scope(self, prompt, *, org_summary):
@@ -258,7 +252,7 @@ def _devops_engineer(rt) -> str:
 
 
 async def test_group_conversation_exercises_need_to_know(rt):
-    """A team group chat must also run the policy engine — not just coordinate."""
+    """A team group chat must also run the need-to-know decision — not just coordinate."""
     dev = _devops_engineer(rt)
     cid = rt.orchestrator.run_cron_task(dev, "production incident — coordinate the on-call response with the team")
     await _drain_until_completed(rt, cid, resolve_hitl=(True, ShareOutcome.SHARE))
@@ -288,9 +282,6 @@ class _FakeLLM:
     async def rerank(self, prompt, ids, blurbs):
         return None
 
-    async def reason_share(self, **kw):
-        return None
-
 
 async def test_llm_authors_messages_and_payload_is_preserved(rt):
     """With an LLM available, agent messages are LLM-authored on the cron path —
@@ -315,3 +306,34 @@ async def test_secret_request_denied_by_operator(rt):
     evs = [e.event for e in rt.broker.recent(10_000) if e.context_id == cid]
     assert "hitl.resolved" in evs
     assert "context.denied" in evs
+
+
+async def test_policy_engine_tightens_an_over_share(rt):
+    """The deterministic Policy Engine reviews the owner's LLM decision and TIGHTENS it when
+    it breaches a codified rule — here a liberal owner SHAREs a secret payment key and the
+    engine forces ESCALATE (PCI / four-eyes), a HITL the owner's SHARE would have skipped."""
+    from atlas.org.ext_models import ShareOutcome as SO
+
+    class _LiberalOwner(_GateLLM):
+        async def decide_share(self, *, requester, owner, item, intent):
+            return (SO.SHARE, "happy to share")  # over-permissive — the engine must catch it
+
+    rt.orchestrator.llm = _LiberalOwner()
+    eng = _billing_engineer(rt)
+    cid = rt.orchestrator.run_cron_task(
+        eng, "I need the billing stripe payment credentials to wire the integration"
+    )
+    await _drain_until_completed(rt, cid, resolve_hitl=(True, ShareOutcome.SHARE))
+    spans = [e.data for e in rt.broker.recent(20_000)
+             if e.event == "trace.span" and e.data.get("kind") == "policy_review"]
+    # the engine is deterministic (every policy_review span is live=False) and it tightened
+    assert spans and all(s["live"] is False for s in spans)
+    restricts = [s for s in spans if s["summary"].startswith("RESTRICT")]
+    assert restricts, "the engine should have tightened the owner's over-share of a secret"
+    assert any("POLICY/" in (s.get("detail") or "") for s in restricts)
+    assert rt.metrics.per_context[cid].policy_overrides >= 1
+    # tightening a secret SHARE → ESCALATE forced a HITL the owner's SHARE would have skipped
+    evs = {e.event for e in rt.broker.recent(20_000) if e.context_id == cid}
+    assert "hitl.requested" in evs
+    # the Security head (the compliance authority) is the trace attribution
+    assert any(s["agent_id"] == rt.orchestrator._policy_officer_id for s in spans)

@@ -38,6 +38,7 @@ export function MetricsStrip() {
       <Tile label="Redacted" value={redacted} color="var(--amber)" accent="var(--amber)" />
       <Tile label="Withheld" value={denied} color="var(--coral)" accent="var(--coral)" />
       <Tile label="HITL" value={m("hitl_escalations")} color="var(--violet)" accent="var(--violet)" />
+      <Tile label="Compliance" value={m("policy_overrides")} color="var(--coral)" accent="var(--coral)" />
       <Tile label="Reuse saved" value={m("redundant_contacts_avoided")} color="var(--ok)" accent="var(--ok)" />
 
       <div className="inset rounded-md px-3 py-1.5 flex flex-col justify-center flex-1 min-w-[210px]">

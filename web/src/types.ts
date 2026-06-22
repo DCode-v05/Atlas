@@ -88,7 +88,7 @@ export interface TraceSpanPayload {
   ts: string;
   agent_id: string;
   context_id?: string | null;
-  kind: string; // route | think | judge_scope | judge_group | phrase | reason_share | policy
+  kind: string; // route | think | judge_scope | judge_group | phrase | decide_share | policy_review
   summary: string;
   live: boolean;
   detail?: string | null;

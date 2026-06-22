@@ -67,18 +67,6 @@ class OrgSnapshot:
                 return aid
         raise KeyError(f"no head for {dept}")
 
-    def manages_transitively(self, manager_id: str, agent_id: str) -> bool:
-        """True if ``manager_id`` is anywhere up ``agent_id``'s reporting chain."""
-        cur = self.agents.get(agent_id)
-        seen: set[str] = set()
-        while cur is not None and cur.profile.reports_to and cur.profile.reports_to not in seen:
-            rt = cur.profile.reports_to
-            if rt == manager_id:
-                return True
-            seen.add(rt)
-            cur = self.agents.get(rt)
-        return False
-
     def cards(self) -> dict[str, AgentCard]:
         return {aid: ag.card for aid, ag in self.agents.items()}
 

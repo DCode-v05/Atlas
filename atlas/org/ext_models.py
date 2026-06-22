@@ -3,7 +3,7 @@
 These ride inside A2A messages / cards via the extension URIs in
 ``a2a/extensions.py``. They are the vocabulary of the communication layer:
 who an agent is, how sensitive a piece of knowledge is, why someone is asking
-for it, and what the policy engine decided.
+for it, and what the share decision was.
 """
 
 from __future__ import annotations
@@ -160,7 +160,7 @@ class ContextItem(BaseModel):
 
 
 class Intent(BaseModel):
-    """The motivation behind an agent→agent request. Read by the policy engine."""
+    """The motivation behind an agent→agent request. Read by the owner agent + compliance reviewer."""
 
     motivation: str  # natural-language "why I'm asking"
     purpose_tag: PurposeTag
@@ -170,7 +170,8 @@ class Intent(BaseModel):
 
 
 class ShareDecision(BaseModel):
-    """The policy engine's ruling on a single share request."""
+    """The need-to-know ruling on a single share request (the owner agent's LLM
+    decision, possibly tightened by the Policy Officer)."""
 
     outcome: ShareOutcome
     reason: str
@@ -245,6 +246,8 @@ class Metrics(BaseModel):
     redundant_contacts_avoided: int = 0
     hitl_escalations: int = 0
     distinct_agents_contacted: int = 0
+    policy_reviews: int = 0       # independent compliance second opinions performed
+    policy_overrides: int = 0     # times the Policy Officer tightened the owner's call
 
     def derived(self) -> dict[str, float]:
         """Ratios the UI shows; safe against divide-by-zero."""
@@ -255,6 +258,9 @@ class Metrics(BaseModel):
             "hitl_ratio": round(self.hitl_escalations / reqs, 3) if reqs else 0.0,
             "efficiency": round(self.items_shared / self.messages, 3)
             if self.messages
+            else 0.0,
+            "policy_override_ratio": round(self.policy_overrides / self.policy_reviews, 3)
+            if self.policy_reviews
             else 0.0,
         }
 

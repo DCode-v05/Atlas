@@ -13,28 +13,6 @@ import pytest
 from atlas.config import Settings
 from atlas.llm import get_provider
 from atlas.llm.bedrock_provider import BedrockProvider, _TokenBucket
-from atlas.org.ext_models import (
-    ContextItem,
-    Department,
-    Intent,
-    Level,
-    OrgProfile,
-    PurposeTag,
-    Scope,
-    Sensitivity,
-    ShareOutcome,
-)
-
-R = OrgProfile(agent_id="R", human_name="R", human_email="r@x", department=Department.ENGINEERING,
-               role_title="engineer", level=Level.IC, clearance=1, teams=["t"], projects=["billing"])
-O = OrgProfile(agent_id="O", human_name="O", human_email="o@x", department=Department.ENGINEERING,
-               role_title="manager", level=Level.MANAGER, clearance=3)
-ITEM = ContextItem(item_id="i", owner_agent_id="O", title="Stripe key", body="redacted-demo",
-                   sensitivity=Sensitivity.SECRET, scope=Scope.PROJECT, scope_ref="billing", min_clearance=1)
-INTENT = Intent(motivation="wiring billing", purpose_tag=PurposeTag.TASK_CONTEXT,
-                requested_topic="billing", declared_scope=Scope.PROJECT)
-
-
 def _provider(**kw) -> BedrockProvider:
     return BedrockProvider(
         region="us-east-1", reasoning_model="mistral.test", phrasing_model="mistral.test",
@@ -46,20 +24,6 @@ def test_bedrock_api_key_sets_bearer_env(monkeypatch):
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
     BedrockProvider(region="us-east-1", reasoning_model="m", phrasing_model="m", api_key="bdrk-demo-key")
     assert os.environ.get("AWS_BEARER_TOKEN_BEDROCK") == "bdrk-demo-key"
-
-
-async def test_bedrock_reason_share_parses_outcome(monkeypatch):
-    prov = _provider()
-
-    async def fake_chat(model, system, user, *, max_tokens, temperature):
-        return "OUTCOME: redact\nREASON: the declared scope is broader than the item"
-
-    monkeypatch.setattr(prov, "_chat", fake_chat)
-    res = await prov.reason_share(requester=R, owner=O, item=ITEM, intent=INTENT, base_outcome=ShareOutcome.SHARE)
-    assert res is not None
-    outcome, reason = res
-    assert outcome == ShareOutcome.REDACT
-    assert "scope" in reason.lower()
 
 
 async def test_bedrock_phrase_humanizes_requests(monkeypatch):

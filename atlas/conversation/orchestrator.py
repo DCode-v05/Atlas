@@ -6,11 +6,14 @@ It runs the SAME pipeline for a user prompt and for a cron-simulated task:
     for each source: ask (with intent) → policy decides → share / redact /
     deny / escalate-to-HITL → remember → finalize the task.
 
-When AWS credentials are configured, the LLM is the real engine on BOTH paths: it
-generates every agent message, re-ranks routing, and gives the tighten-only
-share judgement. The deterministic templates remain only as an automatic
-fallback when no key is set (so the app still boots offline). Secret payloads
-are always delivered verbatim — the LLM authors the prose, code guarantees the
+Real Mistral (Amazon Bedrock) is the engine on BOTH paths and is required: it
+judges the org-scope gate, routes to an owner from the full directory, decides
+whether to coordinate as a group, authors every agent message, and makes the
+need-to-know decision itself (the owner agent chooses share / redact / deny /
+escalate). There are NO templates — a message is genuine Mistral or it is
+omitted. The deterministic policy matrix and skill-scorer survive only as an
+offline fallback (traced live=False) for when the LLM is unreachable. Secret
+payloads are appended verbatim — the LLM authors the prose, code guarantees the
 exact value is present.
 """
 
@@ -40,13 +43,14 @@ from atlas.org.agent import AgentStatus, LearnedFact, OrgAgent
 from atlas.org.ext_models import (
     ContextItem,
     CoordinationMode,
+    Department,
     HitlRequest,
     Intent,
     ShareDecision,
     ShareOutcome,
 )
 from atlas.org.generator import OrgSnapshot
-from atlas.policy import evaluate_share
+from atlas.policy import PolicyEngine
 
 USER_NODE = "operator"
 
@@ -57,8 +61,9 @@ def _clip(s: str, n: int = 88) -> str:
     return s if len(s) <= n else s[:n].rsplit(" ", 1)[0] + "…"
 
 
-def _build_llm_decision(item: ContextItem, outcome: ShareOutcome, reason: str) -> ShareDecision:
-    """Wrap the owner agent's LLM decision into a ShareDecision (fills the delivered
+def _build_llm_decision(item: ContextItem, outcome: ShareOutcome, reason: str,
+                        rule_id: str = "LLM-OWNER") -> ShareDecision:
+    """Wrap an agent's LLM share decision into a ShareDecision (fills the delivered
     body for SHARE/REDACT so the exact value never depends on the model's wording)."""
     body = None
     if outcome == ShareOutcome.SHARE:
@@ -66,9 +71,10 @@ def _build_llm_decision(item: ContextItem, outcome: ShareOutcome, reason: str) -
     elif outcome == ShareOutcome.REDACT:
         body = item.redacted_summary or f"[redacted: {item.title}]"
     return ShareDecision(
-        outcome=outcome, reason=reason, item_id=item.item_id, rule_id="LLM-OWNER",
+        outcome=outcome, reason=reason, item_id=item.item_id, rule_id=rule_id,
         sensitivity=item.sensitivity, delivered_title=item.title, delivered_body=body,
     )
+
 
 GROUP_WORDS = frozenset(
     {
@@ -112,6 +118,14 @@ class Orchestrator:
         self.cron_max_inflight = cron_max_inflight
         self._cron_active = 0
         self._bg: set[asyncio.Task] = set()
+        # The deterministic compliance Policy Engine reviews every owner share decision
+        # (tighten-only). The Security department head is the compliance authority it runs
+        # under (trace attribution); None if the org has no such head.
+        self.policy = PolicyEngine()
+        try:
+            self._policy_officer_id: Optional[str] = snapshot.head_of(Department.SECURITY)
+        except KeyError:
+            self._policy_officer_id = None
 
     # ── public entry points ────────────────────────────────────────────────
     def _org_summary(self) -> str:
@@ -398,8 +412,7 @@ class Orchestrator:
             if msg:
                 thread.message_ids.append(msg.messageId)
 
-            manages = self.snapshot.manages_transitively(agent.id, owner.id)
-            decision = await self._decide_share(agent, owner, item, intent, context_id, manages)
+            decision = await self._decide_share(agent, owner, item, intent, context_id)
             self.metrics.record_decision(context_id, decision.outcome)
             await self._apply_decision(
                 decision, agent, owner, item, intent, context_id, task_id,
@@ -597,8 +610,7 @@ class Orchestrator:
         )
         if sent:
             group.message_ids.append(sent.messageId)
-        manages = self.snapshot.manages_transitively(initiator.id, owner.id)
-        decision = await self._decide_share(initiator, owner, item, intent, context_id, manages)
+        decision = await self._decide_share(initiator, owner, item, intent, context_id)
         self.metrics.record_decision(context_id, decision.outcome)
         group.shared_items.append(item.item_id)
         await self._apply_decision(
@@ -676,10 +688,11 @@ class Orchestrator:
         )
 
     async def _decide_share(self, requester: OrgAgent, owner: OrgAgent, item: ContextItem,
-                            intent: Intent, context_id: str, manages: bool) -> ShareDecision:
-        """The OWNER agent (Mistral) decides share / redact / deny / escalate for its
-        OWN data — its own judgement, no rule matrix. The deterministic policy is kept
-        ONLY as a safe offline net for when the LLM is unreachable (marked live=False)."""
+                            intent: Intent, context_id: str) -> ShareDecision:
+        """The OWNER agent (Mistral) decides share / redact / deny / escalate for its OWN
+        data; the deterministic **Policy Engine** then reviews that decision against codified
+        compliance rules and may tighten it (never loosen). If the LLM can't be reached the
+        decision is NOT chosen by code — it ESCALATEs to the human operator (no engine review)."""
         decide = getattr(self.llm, "decide_share", None)
         if self.llm.available and decide is not None:
             try:
@@ -690,11 +703,40 @@ class Orchestrator:
                 outcome, reason = res
                 self._trace(owner.id, "decide_share", f"{outcome.value.upper()} '{item.title}'",
                             live=True, context_id=context_id, detail=reason)
-                return _build_llm_decision(item, outcome, reason)
-        # offline fallback: the deterministic policy matrix (only when the LLM is down)
-        decision = evaluate_share(requester.profile, owner.profile, item, intent, requester_manages_owner=manages)
-        self._trace(owner.id, "decide_share", f"{decision.outcome.value.upper()} '{item.title}' (offline fallback)",
-                    live=False, context_id=context_id, detail=decision.reason)
+                decision = _build_llm_decision(item, outcome, reason)
+                # deterministic compliance review (the Policy Engine — replaces the LLM officer)
+                return self._policy_review(requester, owner, item, intent, decision, context_id)
+        # LLM unreachable → hand the call to the human operator (HITL); the engine does not
+        # decide for an absent owner, so an undecided share is a person's call, not code's.
+        reason = "Owner's LLM was unavailable — escalated to the operator to decide."
+        self._trace(owner.id, "decide_share", f"ESCALATE '{item.title}' (LLM unavailable → operator)",
+                    live=False, context_id=context_id, detail=reason)
+        return ShareDecision(
+            outcome=ShareOutcome.ESCALATE, reason=reason, item_id=item.item_id, rule_id="LLM-UNAVAILABLE",
+            sensitivity=item.sensitivity, delivered_title=item.title, delivered_body=None,
+        )
+
+    def _policy_review(self, requester: OrgAgent, owner: OrgAgent, item: ContextItem,
+                       intent: Intent, decision: ShareDecision, context_id: str) -> ShareDecision:
+        """Deterministic compliance review (the **Policy Engine**) over the owner's LLM
+        decision: codified need-to-know / least-privilege / SoD / regulatory rules, folded
+        most-restrictive-wins (tighten-only). Replaces the former LLM Policy Officer. Recorded
+        as a `policy_review` trace span (live=False — deterministic) attributed to the Security
+        head (the compliance authority); a tighten re-stamps the decision `rule_id="POLICY/<rule>"`."""
+        officer_id = self._policy_officer_id
+        reviewed = self.policy.review(
+            decision, requester.profile, owner.profile, item, intent, officer_id=officer_id
+        )
+        self.metrics.record_policy_review(context_id)
+        attrib = officer_id or owner.id
+        if reviewed.outcome != decision.outcome:
+            self.metrics.record_policy_override(context_id)
+            self._trace(attrib, "policy_review",
+                        f"RESTRICT {decision.outcome.value.upper()}→{reviewed.outcome.value.upper()} '{item.title}'",
+                        live=False, context_id=context_id, detail=f"{reviewed.rule_id} — {reviewed.reason}")
+            return reviewed
+        self._trace(attrib, "policy_review", f"CONCUR {decision.outcome.value.upper()} '{item.title}'",
+                    live=False, context_id=context_id, detail=f"{reviewed.rule_id} — {reviewed.reason}")
         return decision
 
     def _blurb(self, aid: str) -> str:
