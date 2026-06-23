@@ -692,7 +692,31 @@ class Orchestrator:
         """The OWNER agent (Mistral) decides share / redact / deny / escalate for its OWN
         data; the deterministic **Policy Engine** then reviews that decision against codified
         compliance rules and may tighten it (never loosen). If the LLM can't be reached the
-        decision is NOT chosen by code — it ESCALATEs to the human operator (no engine review)."""
+        decision is NOT chosen by code — it ESCALATEs to the human operator (no engine review).
+
+        **Policy pre-gate (cost/latency optimisation).** The engine's deterministic floor is
+        computed first (against a maximally-permissive hypothetical owner). When that floor is
+        already DENY or ESCALATE — every denial, and every secret (four-eyes) — the owner's LLM
+        is **skipped**: the model cannot loosen a deny, and a secret always needs human approval
+        regardless of what the owner would say, so asking it would only spend a call. The model
+        is consulted only when the floor leaves room for its judgement (SHARE / REDACT)."""
+        officer_id = self._policy_officer_id
+        floor = self.policy.review(
+            _build_llm_decision(item, ShareOutcome.SHARE, "policy pre-gate"),
+            requester.profile, owner.profile, item, intent, officer_id=officer_id,
+        )
+        if floor.outcome in (ShareOutcome.DENY, ShareOutcome.ESCALATE):
+            # The policy already determines the outcome — decide outright, no owner LLM call.
+            self.metrics.record_policy_review(context_id)
+            self.metrics.record_policy_pregate(context_id)  # decided outright, NOT an override
+            self._trace(owner.id, "decide_share", f"SKIPPED (policy pre-gate) '{item.title}'",
+                        live=False, context_id=context_id,
+                        detail="owner LLM not called — the policy floor already determines the outcome")
+            self._trace(officer_id or owner.id, "policy_review",
+                        f"PRE-GATE {floor.outcome.value.upper()} '{item.title}'",
+                        live=False, context_id=context_id, detail=f"{floor.rule_id} — {floor.reason}")
+            return floor
+        # The owner's judgement can still change the result → ask the model, then review.
         decide = getattr(self.llm, "decide_share", None)
         if self.llm.available and decide is not None:
             try:

@@ -15,9 +15,17 @@ the floor that judgement cannot fall below. The Policy Engine is fully determini
 produces the same result — so its decisions are predictable and auditable. It replaced an earlier version in
 which a second language model played the reviewer.
 
-In the code it lives in `atlas/policy/` (`rules.py`, `engine.py`) and is called from `Orchestrator._policy_review`.
-Every review appears as a "Compliance" entry in the activity trace, and the count of reviews and overrides is
-shown on the Compliance metric.
+**One shortcut, for cost and speed (the pre-gate).** Where the rules would settle the matter no matter what the
+owner thinks — every refusal, and every secret (which always needs a human's approval) — the engine runs *first*
+and decides outright, and the model is not asked at all. Asking it would change nothing (the owner cannot loosen
+what the rules require) while costing a model call and a few seconds. The model is consulted only where its
+judgement can still move the result: ordinary share-or-redact situations. The shortcut never makes a result more
+permissive; at most it sends a secret to a human that the owner might have refused on its own.
+
+In the code it lives in `atlas/policy/` (`rules.py`, `engine.py`), called from `Orchestrator._decide_share`
+(the pre-gate) and `Orchestrator._policy_review` (the review of a model decision). Every review appears as a
+"Compliance" entry in the activity trace. The Compliance metric counts both the times the engine tightened a
+real owner decision (overrides) and the times it decided outright (pre-gates).
 
 ## The four possible outcomes
 

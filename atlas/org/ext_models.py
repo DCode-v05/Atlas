@@ -246,8 +246,9 @@ class Metrics(BaseModel):
     redundant_contacts_avoided: int = 0
     hitl_escalations: int = 0
     distinct_agents_contacted: int = 0
-    policy_reviews: int = 0       # independent compliance second opinions performed
-    policy_overrides: int = 0     # times the Policy Officer tightened the owner's call
+    policy_reviews: int = 0       # deterministic compliance reviews the Policy Engine performed
+    policy_overrides: int = 0     # times the Policy Engine tightened a real owner LLM decision
+    policy_pregates: int = 0      # times the Policy Engine decided outright, owner LLM skipped (denials/secrets)
 
     def derived(self) -> dict[str, float]:
         """Ratios the UI shows; safe against divide-by-zero."""

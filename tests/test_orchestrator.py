@@ -310,8 +310,10 @@ async def test_secret_request_denied_by_operator(rt):
 
 async def test_policy_engine_tightens_an_over_share(rt):
     """The deterministic Policy Engine reviews the owner's LLM decision and TIGHTENS it when
-    it breaches a codified rule — here a liberal owner SHAREs a secret payment key and the
-    engine forces ESCALATE (PCI / four-eyes), a HITL the owner's SHARE would have skipped."""
+    it breaches a codified rule — here a liberal owner SHAREs a CONFIDENTIAL record with a
+    requester outside its need-to-know scope, and the engine downgrades the share to a
+    redaction (NEED-TO-KNOW). A confidential item leaves room for the owner's judgement, so
+    the model IS consulted; the engine then floors it (contrast the secret pre-gate below)."""
     from atlas.org.ext_models import ShareOutcome as SO
 
     class _LiberalOwner(_GateLLM):
@@ -319,21 +321,58 @@ async def test_policy_engine_tightens_an_over_share(rt):
             return (SO.SHARE, "happy to share")  # over-permissive — the engine must catch it
 
     rt.orchestrator.llm = _LiberalOwner()
-    eng = _billing_engineer(rt)
+    eng = _billing_engineer(rt)  # on 'billing', NOT 'atlas-core' → outside core-adr's scope
     cid = rt.orchestrator.run_cron_task(
-        eng, "I need the billing stripe payment credentials to wire the integration"
+        eng, "I need the Atlas Core architecture decision record to refactor the billing integration"
     )
+    assert cid
     await _drain_until_completed(rt, cid, resolve_hitl=(True, ShareOutcome.SHARE))
     spans = [e.data for e in rt.broker.recent(20_000)
              if e.event == "trace.span" and e.data.get("kind") == "policy_review"]
     # the engine is deterministic (every policy_review span is live=False) and it tightened
     assert spans and all(s["live"] is False for s in spans)
     restricts = [s for s in spans if s["summary"].startswith("RESTRICT")]
-    assert restricts, "the engine should have tightened the owner's over-share of a secret"
+    assert restricts, "the engine should have tightened the owner's over-share of confidential data"
     assert any("POLICY/" in (s.get("detail") or "") for s in restricts)
     assert rt.metrics.per_context[cid].policy_overrides >= 1
-    # tightening a secret SHARE → ESCALATE forced a HITL the owner's SHARE would have skipped
-    evs = {e.event for e in rt.broker.recent(20_000) if e.context_id == cid}
-    assert "hitl.requested" in evs
-    # the Security head (the compliance authority) is the trace attribution
-    assert any(s["agent_id"] == rt.orchestrator._policy_officer_id for s in spans)
+    # the over-share became a redaction, not a full share
+    assert any(e.event == "context.redacted" and e.context_id == cid for e in rt.broker.recent(20_000))
+
+
+async def test_policy_pregate_short_circuits_a_secret(rt):
+    """Cost/latency optimisation: for a SECRET the deterministic floor is already ESCALATE
+    (four-eyes), so the owner's LLM is SKIPPED — the policy pre-gates straight to an operator
+    escalation. The owner's decide_share is never called for the secret, the step is traced as
+    a deterministic pre-gate, a HITL is raised, and it is metered as a pre-gate (not override)."""
+    from atlas.org.ext_models import ShareOutcome as SO
+
+    decided: list[str] = []
+
+    class _WouldShareOwner(_GateLLM):
+        async def decide_share(self, *, requester, owner, item, intent):
+            decided.append(item.item_id)
+            return (SO.SHARE, "happy to share")
+
+    rt.orchestrator.llm = _WouldShareOwner()
+    eng = _billing_engineer(rt)
+    cid = rt.orchestrator.run_cron_task(
+        eng, "I need the billing stripe payment secret key to wire the integration"
+    )
+    assert cid
+    await _drain_until_completed(rt, cid, resolve_hitl=(True, ShareOutcome.SHARE))
+    # the secret's owner-decision was pre-gated away — the model was never asked for it
+    assert "item-stripe-key" not in decided, "a secret must pre-gate without an owner LLM call"
+    skipped = [e.data for e in rt.broker.recent(20_000)
+               if e.event == "trace.span" and e.data.get("kind") == "decide_share"
+               and e.context_id == cid and e.data["live"] is False
+               and "pre-gate" in e.data["summary"].lower()]
+    assert skipped, "the secret's decide_share step should be traced as a deterministic pre-gate"
+    assert any(e.event == "hitl.requested" and e.context_id == cid for e in rt.broker.recent(20_000))
+    m = rt.metrics.per_context.get(cid)
+    assert m and m.policy_pregates >= 1
+    # the pre-gate is a deterministic policy_review attributed to the Security head (authority)
+    pre = [e.data for e in rt.broker.recent(20_000)
+           if e.event == "trace.span" and e.data.get("kind") == "policy_review"
+           and e.context_id == cid and e.data["summary"].startswith("PRE-GATE")]
+    assert pre and all(s["live"] is False for s in pre)
+    assert any(s["agent_id"] == rt.orchestrator._policy_officer_id for s in pre)

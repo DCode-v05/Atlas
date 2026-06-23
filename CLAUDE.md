@@ -75,14 +75,20 @@ Core A2A types live in `atlas/a2a` (`AgentCard`, `Message`, `Part`, `Task` +
 
 **Two layers — an LLM owner-decision under a deterministic compliance floor.**
 
-**Layer 1 — the owner decides (LLM).** `llm.decide_share(requester, owner, item, intent)`
-returns `SHARE` / `REDACT` / `DENY` / `ESCALATE`(→HITL) from the model's own judgement,
-weighing sensitivity, the requester's role/clearance/teams/projects, and their stated reason.
-**No matrix makes this call** — the model may even choose to share a secret. If the owner's LLM
-is unreachable (no key / throttled / errored / unparseable), `_decide_share` does **not** decide
-in code — it **ESCALATEs to the human operator** (HITL, `rule_id="LLM-UNAVAILABLE"`). So the
-owner's primary decision is always the model's, or a person's — never a matrix's. Traced as a
-`decide_share` span (`live=True`).
+**Layer 1 — the owner decides (LLM), under a policy pre-gate.** `llm.decide_share(requester,
+owner, item, intent)` returns `SHARE` / `REDACT` / `DENY` / `ESCALATE`(→HITL) from the model's
+own judgement, weighing sensitivity, the requester's role/clearance/teams/projects, and their
+stated reason — it may even choose to share a confidential record. **Cost/latency pre-gate:**
+the deterministic floor (Layer 2) is computed *first*, and when it already forces a **DENY or
+ESCALATE** — every denial, and every secret (four-eyes) — the owner's LLM is **skipped** (the
+model cannot loosen a deny; a secret always needs a human regardless), and the policy decides
+outright — metered as `policy_pregates`, traced as a `decide_share` span marked `live=False`
+("SKIPPED — policy pre-gate"). The model is consulted only where its judgement can still change
+the result (SHARE / REDACT floors). If the owner's LLM is unreachable on that remaining path,
+`_decide_share` does **not** decide in code — it **ESCALATEs to the human operator** (HITL,
+`rule_id="LLM-UNAVAILABLE"`). So the call is the model's, the policy's (denials/secrets), or a
+person's — never an arbitrary outcome matrix's. Live owner decisions trace as a `decide_share`
+span (`live=True`).
 
 **Layer 2 — the deterministic Policy Engine (compliance review).** The owner's decision then
 passes through the **`atlas/policy` Policy Engine**, a **tighten-only ABAC** control that may
@@ -93,11 +99,14 @@ default-deny · PCI payment-secret · GDPR PII purpose+minimisation · HR-comp �
 cross-department · secret four-eyes/SoD · officer self-review, each citing a named framework
 (NIST 800-53, PCI-DSS, GDPR, ISO 27001, Bell–LaPadula, XACML, AWS IAM) — are folded
 **most-restrictive-wins** over `SHARE < REDACT < ESCALATE < DENY`, seeded with the owner's
-decision (result ≥ owner's ⇒ tighten-only). Each review is a `policy_review` trace span
-(`live=False` — deterministic) attributed to the Security head (the compliance authority); a
-tighten re-stamps the decision `rule_id="POLICY/<rule>"`, and `policy_reviews` / `policy_overrides`
-are metered (the "Compliance" metric). The owner's *judgment* is the LLM's; the *floor* is the
-policy. (Skipped only on the LLM-unavailable path, which already goes to a human.) Full rule
+decision (result ≥ owner's ⇒ tighten-only). The **same floor doubles as a pre-gate**: computed
+*before* the owner's LLM call, it short-circuits denials and secrets so the model isn't asked
+(see Layer 1). Each review is a `policy_review` trace span (`live=False` — deterministic)
+attributed to the Security head (the compliance authority); a tighten re-stamps the decision
+`rule_id="POLICY/<rule>"`. `policy_reviews` / `policy_overrides` (tightened a real owner decision)
+/ `policy_pregates` (decided outright, owner skipped) are metered — the "Compliance" tile sums
+overrides + pre-gates. The owner's *judgment* is the LLM's; the *floor* is the policy. (The
+review is skipped only on the LLM-unavailable path, which already goes to a human.) Full rule
 table + sources: `docs/policy.md`.
 
 ## How a prompt flows (`atlas/conversation/orchestrator.py`)
@@ -114,8 +123,9 @@ skill-scorer survives only as a fallback for when the LLM is down.
 What stays deterministic by design: who-owns-what / team rosters (the routing directory
 itself is built from facts, but the *choice* is the LLM's; an LLM inventing who owns a
 secret would hallucinate private data). The owner's need-to-know *decision*
-(share/redact/deny/escalate) is the OWNER agent's own LLM call — no matrix makes it; if
-the LLM is unreachable it ESCALATEs to the human (HITL) rather than being decided by code.
+(share/redact/deny/escalate) is the OWNER agent's own LLM call — except where the policy
+**pre-gate** decides outright (denials and every secret skip the model, for cost/latency); if
+the LLM is unreachable on the remaining path it ESCALATEs to the human (HITL), never decided by code.
 A **deterministic Policy Engine** then *reviews* that decision (tighten-only) — the codified
 compliance floor (`atlas/policy`; see `docs/policy.md`). The cron path skips the gate
 (goals are in-scope by construction).
@@ -123,8 +133,10 @@ compliance floor (`atlas/policy`; see `docs/policy.md`). The cron path skips the
 ```
 prompt → org-scope gate (LLM-judged) → Level-1 route (→ best agent) → open Task →
   agent identifies context needs → Level-2 discovery (→ owners) →
-    for each owner: ask (with intent) → owner LLM decides → Policy Engine reviews (tighten-only) →
-      SHARE / REDACT / DENY / ESCALATE→HITL (task input-required, operator approves) →
+    for each owner: ask (with intent) → Policy pre-gate (deterministic floor):
+        · floor already DENY/ESCALATE (denials, secrets) → decide outright, skip the owner LLM
+        · else → owner LLM decides → Policy Engine reviews (tighten-only)
+      → SHARE / REDACT / DENY / ESCALATE→HITL (task input-required, operator approves) →
     or form a GROUP session when Mistral decides to coordinate the team →
   finalize Task → metrics emitted
 ```

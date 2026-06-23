@@ -87,14 +87,21 @@ class MetricsCollector:
         self.totals.redundant_contacts_avoided += 1
 
     def record_policy_review(self, context_id: str) -> None:
-        """The Policy Officer gave an independent compliance second opinion."""
+        """The deterministic Policy Engine reviewed a share decision."""
         self.ctx(context_id).policy_reviews += 1
         self.totals.policy_reviews += 1
 
     def record_policy_override(self, context_id: str) -> None:
-        """The Policy Officer tightened the owner's share decision."""
+        """The Policy Engine tightened a real owner LLM decision."""
         self.ctx(context_id).policy_overrides += 1
         self.totals.policy_overrides += 1
+
+    def record_policy_pregate(self, context_id: str) -> None:
+        """The Policy Engine decided the outcome outright (a deny, or a secret's escalation),
+        so the owner's LLM was skipped — a cost/latency saving, NOT a tighten of a real owner
+        decision (kept separate from overrides so that metric stays comparable)."""
+        self.ctx(context_id).policy_pregates += 1
+        self.totals.policy_pregates += 1
 
     # emit -----------------------------------------------------------------
     def emit(self, context_id: str | None = None) -> None:
