@@ -56,6 +56,61 @@ async def test_agent_card_endpoint(client):
     assert (await c.get("/api/agents/NOPE/card")).status_code == 404
 
 
+_ORG_PROFILE_EXT = "urn:atlas:ext:org-profile:v1"
+
+
+async def test_well_known_service_card_and_catalog(client):
+    c, _ = client
+    # A2A discovery entry point — the Atlas service's public card.
+    card = (await c.get("/.well-known/agent-card.json")).json()
+    assert card["name"] == "Atlas"
+    assert card["capabilities"]["extendedAgentCard"] is True
+    assert card["securitySchemes"]  # carries the A2A security schemes
+    assert card["protocolVersion"] == "1.0.0"
+    assert card["x-atlas-agent-catalog"] == "/.well-known/agents.json"
+    # the catalog enumerates every agent + its public-card URL
+    cat = (await c.get("/.well-known/agents.json")).json()
+    assert cat["count"] == 100
+    assert cat["agents"][0]["card_url"].startswith("/.well-known/agents/")
+
+
+async def test_public_card_hides_org_profile_but_extended_reveals_it(client):
+    c, _ = client
+    aid = (await c.get("/api/org")).json()["nodes"][0]["id"]
+
+    # PUBLIC card (well-known, no auth) — internal org profile is withheld.
+    pub = (await c.get(f"/.well-known/agents/{aid}/agent-card.json")).json()
+    pub_uris = {e["uri"] for e in pub["extensions"]}
+    assert _ORG_PROFILE_EXT not in pub_uris
+    assert pub["capabilities"]["extendedAgentCard"] is True  # advertises the richer card
+    assert (await c.get("/.well-known/agents/NOPE/agent-card.json")).status_code == 404
+
+    # EXTENDED card (authenticated) — the full org profile is present.
+    ext = (await c.get(f"/api/agents/{aid}/card/extended")).json()
+    ext_uris = {e["uri"] for e in ext["extensions"]}
+    assert _ORG_PROFILE_EXT in ext_uris
+    prof = next(e for e in ext["extensions"] if e["uri"] == _ORG_PROFILE_EXT)
+    assert prof["metadata"]["clearance"] >= 1  # real internal detail
+    assert (await c.get("/api/agents/NOPE/card/extended")).status_code == 404
+
+
+async def test_extended_card_is_auth_gated_while_discovery_stays_public(offline_llm):
+    settings = Settings(seed=42, hitl_timeout_seconds=0.0, api_key="secret-key", _env_file=None)
+    rt = build_runtime(settings, step_delay=0.0, llm=offline_llm)
+    app = create_app()
+    app.state.runtime = rt
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        aid = (await c.get("/api/org", headers={"X-API-Key": "secret-key"})).json()["nodes"][0]["id"]
+        # public discovery works WITHOUT a key
+        assert (await c.get("/.well-known/agent-card.json")).status_code == 200
+        assert (await c.get(f"/.well-known/agents/{aid}/agent-card.json")).status_code == 200
+        # the extended card REQUIRES the key (A2A: authenticated tier)
+        assert (await c.get(f"/api/agents/{aid}/card/extended")).status_code == 401
+        ok = await c.get(f"/api/agents/{aid}/card/extended", headers={"X-API-Key": "secret-key"})
+        assert ok.status_code == 200
+
+
 async def test_users_endpoint_is_1to1_with_agents(client):
     c, _ = client
     data = (await c.get("/api/users")).json()

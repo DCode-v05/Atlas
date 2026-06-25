@@ -18,6 +18,7 @@ from atlas.a2a.models import (
     PushNotificationConfig,
     TaskPushNotificationConfig,
 )
+from atlas.a2a.cards import agent_catalog, extended_agent_card, public_agent_card, service_agent_card
 from atlas.api.projects import build_project_view, list_projects
 from atlas.api.viewmodels import agent_card_view, build_org_view, thread_view
 from atlas.config import get_settings
@@ -54,6 +55,22 @@ def agent_card(agent_id: str, request: Request):
     if agent_id not in rt.registry.agents:
         raise HTTPException(404, "unknown agent")
     return agent_card_view(rt, agent_id)
+
+
+@router.get("/agents/{agent_id}/card/extended")
+def agent_card_extended(agent_id: str, request: Request):
+    """A2A ``GetExtendedAgentCard`` — the richer card served to AUTHENTICATED
+    callers (the org-profile extension: dept / level / clearance / reportsTo / goal).
+
+    This route lives under ``/api`` so the edge-auth middleware gates it whenever
+    ``ATLAS_API_KEY`` is configured; the public card (well-known) never requires auth."""
+    rt = _rt(request)
+    ag = rt.registry.agents.get(agent_id)
+    if ag is None:
+        raise HTTPException(404, "unknown agent")
+    if not ag.card.capabilities.extendedAgentCard:
+        raise HTTPException(404, "this agent does not offer an extended card")
+    return extended_agent_card(ag.card)
 
 
 @router.get("/users")
@@ -395,3 +412,30 @@ async def history_clear(request: Request):
     rt.tasks.clear()           # in-memory task registry
     rt.broker.history.clear()  # so a reconnecting SSE client can't replay the old events
     return {"ok": True, "cleared": cleared}
+
+
+# ── A2A discovery: public Agent Cards at the well-known URI (root, no auth) ──────
+# These live OUTSIDE the /api prefix so they are NOT gated by the edge-auth
+# middleware — discovery is public by design (the entry point to the ecosystem).
+wellknown_router = APIRouter()
+
+
+@wellknown_router.get("/.well-known/agent-card.json")
+def well_known_agent_card(request: Request):
+    """A2A discovery entry point — the Atlas service's primary PUBLIC Agent Card."""
+    return service_agent_card(_rt(request).snapshot)
+
+
+@wellknown_router.get("/.well-known/agents.json")
+def well_known_agent_catalog(request: Request):
+    """Discovery index — every agent and the URL of its public card."""
+    return agent_catalog(_rt(request).snapshot)
+
+
+@wellknown_router.get("/.well-known/agents/{agent_id}/agent-card.json")
+def well_known_agent_card_for(agent_id: str, request: Request):
+    """A specific agent's PUBLIC Agent Card (no internal org profile)."""
+    ag = _rt(request).registry.agents.get(agent_id)
+    if ag is None:
+        raise HTTPException(404, "unknown agent")
+    return public_agent_card(ag.card)

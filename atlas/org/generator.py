@@ -239,11 +239,14 @@ def generate_org(seed: int) -> OrgSnapshot:
             name=ag.profile.human_name,
             description=f"{ag.profile.role_title}, {ag.profile.department.value.title()} @ {ORG_NAME}",
             provider=AgentProvider(organization=ORG_NAME, url="https://atlas.dev"),
+            url=f"https://atlas.dev/.well-known/agents/{ag.id}/agent-card.json",
+            preferredTransport="in-process",
             skills=skills,
             interfaces=[AgentInterface(transport="in-process", url=f"atlas://agent/{ag.id}")],
             capabilities=AgentCapabilities(
                 streaming=True,
                 pushNotifications=True,  # backed by the webhook delivery subsystem (atlas/push)
+                extendedAgentCard=True,  # a richer card is available to authenticated callers
                 extensions=[AgentExtension(uri=NEED_TO_KNOW_EXT), AgentExtension(uri=COORDINATION_EXT)],
             ),
             securitySchemes=dict(SECURITY_SCHEMES),

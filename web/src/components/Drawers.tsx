@@ -326,6 +326,16 @@ export function AgentCardDrawer() {
       <div className="p-4">
         {tab === "overview" && (
           <>
+            <Section label="A2A discovery">
+              <div className="flex items-center gap-2 text-[11px]">
+                <a href={`/.well-known/agents/${id}/agent-card.json`} target="_blank" rel="noreferrer"
+                   className="inline-flex items-center gap-1 rounded px-2 py-1 transition-colors hover:brightness-110"
+                   style={{ color: "var(--accent)", background: "var(--accent-soft)" }}>Public card</a>
+                <a href={`/api/agents/${id}/card/extended`} target="_blank" rel="noreferrer"
+                   className="inline-flex items-center gap-1 rounded px-2 py-1 transition-colors hover:brightness-110"
+                   style={{ color: "var(--coral)", background: "rgba(209,42,58,0.08)" }} title="Authenticated — adds the org profile (dept/level/clearance)">Extended card 🔒</a>
+              </div>
+            </Section>
             {(card?.goal ?? node?.goal) && (
               <Section label="Goal · responsibility"><div className="text-[12px] text-ink leading-snug">{card?.goal ?? node?.goal}</div></Section>
             )}
