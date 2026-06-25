@@ -27,6 +27,10 @@ const jsonPost = (body: unknown): RequestInit => ({
 export const api = {
   org: () => j<OrgView>("/org"),
   card: (id: string) => j<AgentCardView>(`/agents/${id}/card`),
+  // A2A discovery: the PUBLIC card (root well-known, no auth) and the AUTHENTICATED extended card.
+  publicCard: (id: string) =>
+    fetch(`/.well-known/agents/${id}/agent-card.json`).then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status))))),
+  extendedCard: (id: string) => j<any>(`/agents/${id}/card/extended`),
   metrics: () => j("/metrics"),
   hitl: () => j<{ pending: any[]; resolved_count: number }>("/hitl"),
   tasks: () => j("/tasks"),
