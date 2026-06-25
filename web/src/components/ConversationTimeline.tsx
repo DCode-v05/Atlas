@@ -101,6 +101,16 @@ function ConversationCard({ cid }: { cid: string }) {
               {state && <span className="mono text-[9px] uppercase tracking-wide" style={{ color: stateColor }}>● {state}</span>}
             </div>
           </div>
+          {ctx?.taskId && state !== "completed" && state !== "failed" && state !== "canceled" && (
+            <button
+              onClick={(e) => { e.stopPropagation(); api.cancelTask(ctx.taskId!).catch(console.error); }}
+              title="Cancel this task — abort the agents mid-exchange"
+              className="shrink-0 inline-flex items-center gap-1 rounded px-1.5 h-6 mono text-[9px] font-bold uppercase tracking-wider transition-colors"
+              style={{ color: "var(--coral)", border: "1px solid var(--coral)", background: "transparent" }}
+            >
+              <X size={10} /> Cancel
+            </button>
+          )}
         </div>
       </div>
 

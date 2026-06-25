@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Optional
 
 from atlas.a2a.extensions import NEED_TO_KNOW_EXT
-from atlas.a2a.models import Message, Task, TaskState, TaskStatus
+from atlas.a2a.models import TERMINAL_STATES, Message, Task, TaskState, TaskStatus
 from atlas.bus.discovery import Discovery, tokenize
 from atlas.bus.registry import AgentRegistry
 from atlas.events import (
@@ -130,6 +130,11 @@ class Router:
         return task
 
     def set_task_state(self, task: Task, state: TaskState, message: Optional[str] = None) -> None:
+        # A2A terminal states are final: once completed/failed/canceled, no further
+        # transition is allowed. This is what makes Cancel safe against a racing
+        # scenario coroutine that would otherwise flip a canceled task to completed.
+        if task.status.state in TERMINAL_STATES:
+            return
         m = task.status.message
         if message is not None:
             m = Message.text_message("agent", message, contextId=task.contextId, taskId=task.id)

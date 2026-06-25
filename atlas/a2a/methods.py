@@ -15,5 +15,6 @@ class A2AMethod(str, Enum):
     MESSAGE_STREAM = "message/stream"
     TASKS_GET = "tasks/get"
     TASKS_CANCEL = "tasks/cancel"
+    TASKS_RESUBSCRIBE = "tasks/resubscribe"  # SubscribeToTask — stream an existing task
     TASKS_LIST = "tasks/list"
     AGENT_CARD = "agent/card"

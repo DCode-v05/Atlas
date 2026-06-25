@@ -23,7 +23,7 @@ import asyncio
 from typing import Optional
 
 from atlas.a2a.ids import new_id
-from atlas.a2a.models import Artifact, TaskState, TextPart
+from atlas.a2a.models import TERMINAL_STATES, Artifact, Task, TaskState, TextPart
 from atlas.bus.discovery import tokenize
 from atlas.bus.registry import AgentRegistry
 from atlas.bus.router import GATE_REASON, Router
@@ -121,6 +121,7 @@ class Orchestrator:
         self.dbwriter = None  # set by build_runtime; durable write-through when persistence is on
         self._cron_active = 0
         self._bg: set[asyncio.Task] = set()
+        self._scenarios: dict[str, asyncio.Task] = {}  # task_id -> running scenario (for cancel)
         # The deterministic compliance Policy Engine reviews every owner share decision
         # (tighten-only). The Security department head is the compliance authority it runs
         # under (trace attribution); None if the org has no such head.
@@ -241,7 +242,8 @@ class Orchestrator:
             })
         self._spawn(
             self._run_greeting(prompt, chosen, context_id, task.id) if greeting
-            else self._run_scenario(prompt, chosen, context_id, task.id)
+            else self._run_scenario(prompt, chosen, context_id, task.id),
+            task_id=task.id,
         )
         return {
             "rejected": False, "task_id": task.id, "context_id": context_id,
@@ -278,7 +280,7 @@ class Orchestrator:
                 "context_id": context_id, "prompt": prompt, "kind": "cron",
                 "routed_to": initiator_id, "routed_to_name": agent.name, "task_id": task.id,
             })
-        self._spawn(self._run_scenario(prompt, initiator_id, context_id, task.id, cron=True))
+        self._spawn(self._run_scenario(prompt, initiator_id, context_id, task.id, cron=True), task_id=task.id)
         return context_id
 
     # ── scenario ────────────────────────────────────────────────────────────
@@ -848,7 +850,37 @@ class Orchestrator:
         if self.step_delay > 0:
             await asyncio.sleep(self.step_delay * factor)
 
-    def _spawn(self, coro) -> None:
+    def _spawn(self, coro, *, task_id: Optional[str] = None) -> asyncio.Task:
         task = asyncio.ensure_future(coro)
         self._bg.add(task)
         task.add_done_callback(self._bg.discard)
+        if task_id is not None:
+            self._scenarios[task_id] = task
+            task.add_done_callback(lambda _t, k=task_id: self._scenarios.pop(k, None))
+        return task
+
+    async def cancel_task(self, task_id: str) -> Optional[Task]:
+        """A2A ``tasks/cancel`` — abort an in-flight task (user goal or cron goal),
+        drive it to the terminal ``canceled`` state, stop its scenario coroutine,
+        clear any pending HITL, and return the agents to idle. Idempotent: a task
+        that's already finished is returned unchanged."""
+        task = self.router.tasks.get(task_id)
+        if task is None:
+            return None
+        if task.status.state in TERMINAL_STATES:
+            return task  # already completed/failed/canceled — nothing to do
+        # 1. Freeze the state first so the running scenario can't flip it to completed.
+        self.router.set_task_state(task, TaskState.CANCELED, message="Canceled by the operator.")
+        # 2. Stop the scenario coroutine (it may be mid-LLM-call or parked on HITL).
+        scenario = self._scenarios.pop(task_id, None)
+        if scenario is not None and not scenario.done():
+            scenario.cancel()
+        # 3. Clear any pending HITL for this context (drops it from the queue + UI).
+        for req in self.hitl.list_pending():
+            if req.context_id == task.contextId:
+                self.hitl.resolve(req.request_id, approved=False, outcome=ShareOutcome.DENY, decided_by="canceled")
+        # 4. Return every agent that took part back to idle.
+        for aid in self.metrics.involved(task.contextId):
+            self.router.set_status(aid, AgentStatus.IDLE)
+        self.metrics.emit(task.contextId)
+        return task

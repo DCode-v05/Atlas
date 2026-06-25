@@ -133,6 +133,61 @@ async def test_prompt_completes_with_hitl_approval_and_metrics(client):
     assert totals["distinct_agents_contacted"] > 0
 
 
+async def _open_inflight_task(c) -> str:
+    """Open a task that escalates to HITL and park it there (in-flight). Returns task_id."""
+    r = await c.post("/api/prompt", json={
+        "prompt": "help wire the billing stripe payment integration and get the credentials"})
+    data = r.json()
+    assert data["rejected"] is False
+    tid = data["task_id"]
+    for _ in range(400):
+        await asyncio.sleep(0.01)
+        st = (await c.get(f"/api/tasks/{tid}")).json()["status"]["state"]
+        if st in ("input-required", "working"):
+            return tid
+    raise AssertionError("task never went in-flight")
+
+
+async def test_cancel_task_aborts_inflight_and_is_terminal(client):
+    c, _ = client
+    tid = await _open_inflight_task(c)
+
+    rc = await c.post(f"/api/tasks/{tid}/cancel")
+    assert rc.status_code == 200
+    assert rc.json()["status"]["state"] == "canceled"
+
+    # stays canceled (terminal — a racing scenario can't flip it to completed)…
+    await asyncio.sleep(0.2)
+    assert (await c.get(f"/api/tasks/{tid}")).json()["status"]["state"] == "canceled"
+    # …and any pending HITL for it is cleared
+    assert (await c.get("/api/hitl")).json()["pending"] == []
+    # unknown task → 404; cancelling an already-terminal task is idempotent
+    assert (await c.post("/api/tasks/NOPE/cancel")).status_code == 404
+    assert (await c.post(f"/api/tasks/{tid}/cancel")).json()["status"]["state"] == "canceled"
+
+
+async def test_subscribe_streams_a2a_frames_and_closes_on_terminal(client):
+    c, _ = client
+    tid = await _open_inflight_task(c)
+    await c.post(f"/api/tasks/{tid}/cancel")  # make it terminal so the stream closes
+
+    events, saw_final = [], False
+    async with c.stream("GET", f"/api/tasks/{tid}/subscribe") as resp:
+        assert resp.status_code == 200
+        async for line in resp.aiter_lines():
+            if line.startswith("event:"):
+                events.append(line.split(":", 1)[1].strip())
+            if line.startswith("data:") and '"final":true' in line.replace(" ", ""):
+                saw_final = True
+            if saw_final:
+                break
+    assert "task" in events           # A2A: current Task snapshot on attach
+    assert "status-update" in events  # spec-shaped TaskStatusUpdateEvent
+    assert saw_final                  # terminal frame carries final=true (stream closes)
+
+    assert (await c.get("/api/tasks/NOPE/subscribe")).status_code == 404
+
+
 async def test_cron_toggle_via_api(client):
     c, rt = client
     rt.cron.tick_seconds = 0.05

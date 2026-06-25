@@ -13,14 +13,22 @@ import base64
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from sse_starlette.sse import EventSourceResponse
 
+from atlas.a2a.ids import new_id
 from atlas.a2a.models import (
+    TERMINAL_STATES,
+    Message,
     PushNotificationAuthentication,
     PushNotificationConfig,
+    StreamResponse,
+    TaskArtifactUpdateEvent,
     TaskPushNotificationConfig,
+    TaskStatusUpdateEvent,
+    TextPart,
 )
 from atlas.api.projects import build_project_view, list_projects
 from atlas.api.viewmodels import agent_card_view, build_org_view, thread_view
 from atlas.config import get_settings
+from atlas.events import EventType
 from atlas.org.ext_models import ShareOutcome
 from atlas.runtime import build_runtime
 from atlas.store import export_snapshot
@@ -113,6 +121,85 @@ def task_detail(task_id: str, request: Request):
     if t is None:
         raise HTTPException(404, "unknown task")
     return t.model_dump(mode="json")
+
+
+@router.post("/tasks/{task_id}/cancel")
+async def cancel_task(task_id: str, request: Request):
+    """A2A ``tasks/cancel`` — abort an in-flight task (user goal or cron goal),
+    driving it to the terminal ``canceled`` state and stopping its agents."""
+    rt = _rt(request)
+    task = await rt.orchestrator.cancel_task(task_id)
+    if task is None:
+        raise HTTPException(404, "unknown task")
+    return task.model_dump(mode="json")
+
+
+@router.get("/tasks/{task_id}/subscribe")
+async def subscribe_task(task_id: str, request: Request):
+    """A2A ``SubscribeToTask`` — stream ONE task's lifecycle as spec-shaped
+    ``StreamResponse`` frames (a Task snapshot on attach, then status-update /
+    message / artifact-update events), closing on a terminal state with
+    ``final: true`` — the A2A ordered-event + terminal-close contract.
+
+    Any A2A client can consume this without bespoke mapping; it's the
+    agent-to-agent counterpart of the browser's global ``/events`` SSE."""
+    rt = _rt(request)
+    if rt.tasks.get(task_id) is None:
+        raise HTTPException(404, "unknown task")
+    context_id = rt.tasks[task_id].contextId
+    broker = rt.broker
+    queue = broker.subscribe()
+
+    def frame(sr: StreamResponse, event: str) -> dict:
+        return {"event": event, "data": sr.model_dump_json(exclude_none=True)}
+
+    def status_frame(t) -> dict:
+        final = t.status.state in TERMINAL_STATES
+        sr = StreamResponse(statusUpdate=TaskStatusUpdateEvent(
+            taskId=task_id, contextId=context_id, status=t.status, final=final))
+        return frame(sr, "status-update")
+
+    async def generator():
+        try:
+            snap = rt.tasks.get(task_id)
+            if snap is not None:
+                yield frame(StreamResponse(task=snap), "task")  # A2A: current state on attach
+                if snap.status.state in TERMINAL_STATES:
+                    yield status_frame(snap)  # already finished → final frame, then close
+                    return
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    evt = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield {"event": "ping", "data": "{}"}
+                    continue
+                if evt.context_id != context_id:
+                    continue
+                if evt.event == EventType.TASK_STATE.value:
+                    t = rt.tasks.get(task_id)
+                    if t is None:
+                        continue
+                    yield status_frame(t)
+                    if t.status.state in TERMINAL_STATES:
+                        for art in (t.artifacts or []):  # surface artifacts, then close
+                            yield frame(StreamResponse(artifactUpdate=TaskArtifactUpdateEvent(
+                                taskId=task_id, contextId=context_id, artifact=art)), "artifact-update")
+                        break
+                elif evt.event == EventType.MESSAGE_SENT.value:
+                    d = evt.data or {}
+                    msg = Message(
+                        messageId=d.get("message_id") or new_id("msg-"),
+                        role=d.get("role", "agent"),
+                        parts=[TextPart(text=d.get("text", ""))],
+                        contextId=context_id, taskId=task_id,
+                    )
+                    yield frame(StreamResponse(message=msg), "message")
+        finally:
+            broker.unsubscribe(queue)
+
+    return EventSourceResponse(generator())
 
 
 # ── push-notification configs (A2A pushNotificationConfig/Set·Get·List·Delete) ──

@@ -174,6 +174,46 @@ class Task(BaseModel):
         return self.status.state
 
 
+# ─── A2A streaming events (SubscribeToTask / SendStreamingMessage) ────────────
+
+
+class TaskStatusUpdateEvent(BaseModel):
+    """A2A status-update event — a task's state changed. ``final`` is True on a
+    terminal state, at which point the stream closes (the A2A terminal-close
+    contract). This is the spec shape an external streaming client receives."""
+
+    kind: Literal["status-update"] = "status-update"
+    taskId: str
+    contextId: str
+    status: TaskStatus
+    final: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class TaskArtifactUpdateEvent(BaseModel):
+    """A2A artifact-update event — a new/updated artifact produced by a task.
+    ``lastChunk`` marks the final piece of a (possibly chunked) artifact."""
+
+    kind: Literal["artifact-update"] = "artifact-update"
+    taskId: str
+    contextId: str
+    artifact: Artifact
+    append: bool = False
+    lastChunk: bool = True
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class StreamResponse(BaseModel):
+    """The A2A streaming envelope (a oneof): each streamed frame carries exactly
+    one of a full Task snapshot, a Message, a status-update, or an artifact-update.
+    This is what ``SubscribeToTask`` / ``SendStreamingMessage`` yield per event."""
+
+    task: Optional[Task] = None
+    message: Optional[Message] = None
+    statusUpdate: Optional[TaskStatusUpdateEvent] = None
+    artifactUpdate: Optional[TaskArtifactUpdateEvent] = None
+
+
 # ─── Push notification (webhook) config ───────────────────────────────────────
 
 

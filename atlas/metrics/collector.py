@@ -86,6 +86,11 @@ class MetricsCollector:
         self.ctx(context_id).redundant_contacts_avoided += 1
         self.totals.redundant_contacts_avoided += 1
 
+    def involved(self, context_id: str) -> set[str]:
+        """Every agent that took part in a context (chain + contacted) — used to
+        reset their status back to idle when a task is canceled mid-flight."""
+        return set(self._chain.get(context_id, set())) | set(self._contacted.get(context_id, set()))
+
     def record_policy_review(self, context_id: str) -> None:
         """The deterministic Policy Engine reviewed a share decision."""
         self.ctx(context_id).policy_reviews += 1

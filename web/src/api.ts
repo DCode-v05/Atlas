@@ -46,6 +46,7 @@ export const api = {
   networkDisconnect: (id: string) => j<{ ok: boolean; agent_id: string; count: number }>(`/network/agents/${id}/disconnect`, { method: "POST" }),
   prompt: (prompt: string, opts: { human?: string; user_id?: string } = {}) =>
     j("/prompt", jsonPost({ prompt, human: opts.human ?? "Operator", ...(opts.user_id ? { user_id: opts.user_id } : {}) })),
+  cancelTask: (taskId: string) => j(`/tasks/${taskId}/cancel`, { method: "POST" }),
   cron: (on: boolean) => j("/cron", jsonPost({ on })),
   approve: (id: string, outcome: "share" | "redact" = "share") =>
     j(`/hitl/${id}/approve?outcome=${outcome}`, { method: "POST" }),
