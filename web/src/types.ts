@@ -153,6 +153,66 @@ export interface LlmStatusPayload {
   reason: string;
 }
 
+export interface PushDeliveredPayload {
+  task_id: string;
+  context_id?: string | null;
+  config_id: string;
+  url: string;
+  ok: boolean;
+  status_code?: number | null;
+  state: string;
+  final: boolean;
+}
+
+export interface NetworkMemberPayload {
+  agent_id: string;
+  name: string;
+  department: string;
+  role: string;
+  session_id: string;
+  members: number;
+}
+
+// ─── /api/history — the persisted conversation record (replayed on load) ────────
+export interface HistoryMessage {
+  message_id: string;
+  sender: string;
+  recipients: string[];
+  mode: "individual" | "group";
+  role: string;
+  text: string;
+  thinking?: string | null;
+  intent?: { motivation?: string; purpose_tag?: string; requested_topic?: string; declared_scope?: string } | null;
+  thread_id?: string | null;
+  group_id?: string | null;
+  ts: number; // milliseconds (normalized server-side)
+}
+export interface HistoryDecision {
+  context_id: string;
+  item_id?: string;
+  title?: string;
+  sender?: string;
+  recipient?: string;
+  sensitivity?: string;
+  rule_id?: string;
+  reason?: string;
+  summary?: string | null;
+  kind: string;
+  ts: number;
+}
+export interface HistoryConversation {
+  context_id: string;
+  prompt: string;
+  kind: "user" | "cron";
+  routed_to: string;
+  routed_to_name: string;
+  task_id?: string | null;
+  state: string;
+  ts: number;
+  messages: HistoryMessage[];
+  decisions: HistoryDecision[];
+}
+
 export const KNOWN_EVENTS = new Set<string>([
   "agent.status",
   "prompt.accepted",
@@ -173,6 +233,9 @@ export const KNOWN_EVENTS = new Set<string>([
   "cron.state",
   "llm.status",
   "trace.span",
+  "push.delivered",
+  "network.joined",
+  "network.left",
 ]);
 
 // ─── REST view models (atlas/api/viewmodels.py) ──────────────────────────────
@@ -214,6 +277,22 @@ export interface ProjectSummary {
   members: number;
   departments: number;
   secrets: number;
+}
+// ─── Users directory (atlas/api/routes.py /users — 1:1 with agents) ──────────
+export interface UserDirEntry {
+  user_id: string;
+  name: string;
+  email: string;
+  agent_id: string;
+  department: string;
+  role_title: string;
+}
+// ─── Push notification configs (atlas/a2a/models.py — A2A PushNotificationConfig) ──
+export interface PushConfig {
+  id: string;
+  url: string;
+  token?: string | null;
+  authentication?: { schemes: string[]; credentials?: string | null } | null;
 }
 export interface ProjectMember {
   agent_id: string;

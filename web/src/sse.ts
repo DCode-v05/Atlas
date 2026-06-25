@@ -1,9 +1,10 @@
+import { API_KEY } from "./api";
 import { useStore } from "./store";
 import { KNOWN_EVENTS } from "./types";
 
-// Native EventSource: the stream is an unauthenticated same-origin GET, so no
-// custom headers are needed. Named events are dispatched per type; ready/ping
-// keep-alives are handled separately and never reach applyEvent.
+// Native EventSource is a same-origin GET that can't set headers, so when edge
+// auth is enabled the key rides as a ?key= query param. Named events are
+// dispatched per type; ready/ping keep-alives never reach applyEvent.
 
 let es: EventSource | null = null;
 let pruneTimer: number | null = null;
@@ -13,7 +14,8 @@ export function connectSSE(): void {
   setConn("connecting");
 
   es?.close();
-  es = new EventSource("/api/events");
+  const url = API_KEY ? `/api/events?key=${encodeURIComponent(API_KEY)}` : "/api/events";
+  es = new EventSource(url);
 
   es.addEventListener("open", () => useStore.getState().setConn("live"));
   es.addEventListener("ready", () => useStore.getState().setConn("live"));

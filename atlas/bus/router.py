@@ -55,6 +55,8 @@ class Router:
         self.metrics = metrics
         self.tasks = tasks
         self.gate_floor = gate_floor
+        self.network = None  # set by build_runtime; enables the membership backstop when live
+        self.dbwriter = None  # set by build_runtime; durable write-through when persistence is on
 
     # ── org-scope gate ────────────────────────────────────────────────────
     def org_scope_gate(self, text: str) -> tuple[bool, str]:
@@ -84,8 +86,8 @@ class Router:
             department=ag.profile.department.value,
         )
 
-    def route_prompt(self, text: str) -> tuple[Optional[str], list[tuple[str, float]]]:
-        chosen, scored, _ = self.discovery.route_prompt(text)
+    def route_prompt(self, text: str, pool_ids=None) -> tuple[Optional[str], list[tuple[str, float]]]:
+        chosen, scored, _ = self.discovery.route_prompt(text, pool_ids=pool_ids)
         return chosen, scored
 
     def emit_discovery(
@@ -123,6 +125,8 @@ class Router:
         task = Task(contextId=context_id, status=TaskStatus(state=state, message=m))
         self.tasks[task.id] = task
         self._emit_task(task)
+        if self.dbwriter is not None:
+            self.dbwriter.record("task", {"id": task.id, "context_id": context_id, "state": state.value})
         return task
 
     def set_task_state(self, task: Task, state: TaskState, message: Optional[str] = None) -> None:
@@ -131,6 +135,11 @@ class Router:
             m = Message.text_message("agent", message, contextId=task.contextId, taskId=task.id)
         task.status = TaskStatus(state=state, message=m)
         self._emit_task(task)
+        if self.dbwriter is not None:
+            self.dbwriter.record("task", {
+                "id": task.id, "context_id": task.contextId, "state": state.value,
+                "summary": message if state == TaskState.COMPLETED else None,
+            })
 
     def _emit_task(self, task: Task) -> None:
         msg = task.status.message.text_content if task.status.message else None
@@ -184,7 +193,15 @@ class Router:
         group_id: Optional[str] = None,
         task: Optional[Task] = None,
         thinking: Optional[str] = None,
-    ) -> Message:
+    ) -> Optional[Message]:
+        # Network membership backstop: only joined agents (or the operator edge) use the bus.
+        # The orchestrator already routes within the network; this enforces the invariant.
+        if self.network is not None and getattr(self.network, "active", False):
+            if sender != "operator" and not self.network.is_member(sender):
+                return None
+            recipients = [r for r in recipients if r == "operator" or self.network.is_member(r)]
+            if not recipients:
+                return None
         meta: dict = {}
         extensions: list[str] = []
         intent_view: Optional[IntentView] = None
@@ -225,4 +242,11 @@ class Router:
             ),
             context_id=context_id,
         )
+        if self.dbwriter is not None:
+            self.dbwriter.record("message", {
+                "id": msg.messageId, "context_id": context_id, "task_id": (task.id if task else None),
+                "sender": sender, "recipients": list(recipients), "mode": mode.value, "role": role,
+                "text": text, "thinking": thinking, "thread_id": thread_id, "group_id": group_id,
+                "intent": (intent.model_dump(mode="json") if intent is not None else None),
+            })
         return msg

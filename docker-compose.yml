@@ -16,10 +16,39 @@ services:
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      # Edge auth (opt-in): set ATLAS_API_KEY in .env to gate /api/* (401/403). Unset = open.
+      ATLAS_API_KEY: ${ATLAS_API_KEY:-}
       # Model ids — set these in .env to a foundation-model id OR an inference-profile ARN.
       ATLAS_BEDROCK_REASONING_MODEL: "${ATLAS_BEDROCK_REASONING_MODEL:-mistral.mistral-large-2402-v1:0}"
       ATLAS_BEDROCK_PHRASING_MODEL: "${ATLAS_BEDROCK_PHRASING_MODEL:-mistral.mistral-large-2402-v1:0}"
       # Throttling — lower these in .env if your Bedrock quota is tight (429s).
       ATLAS_BEDROCK_RPM: "${ATLAS_BEDROCK_RPM:-22}"
       ATLAS_BEDROCK_BURST: "${ATLAS_BEDROCK_BURST:-5}"
+      # Persistence + authenticated network. HARDCODED to the bundled `postgres` service (NOT read
+      # from .env) so a `@localhost` ATLAS_DATABASE_URL in .env — correct for a local `uv run`, but
+      # wrong inside a container, where localhost is the app itself (no DB there) — can't break the
+      # Docker stack. To point Atlas at an external Postgres, edit this line.
+      ATLAS_DATABASE_URL: "postgresql+asyncpg://atlas:atlas@postgres:5432/atlas"
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: "no"
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: atlas-postgres
+    environment:
+      POSTGRES_USER: atlas
+      POSTGRES_PASSWORD: atlas
+      POSTGRES_DB: atlas
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atlas -d atlas"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    volumes:
+      - atlas_pgdata:/var/lib/postgresql/data
+    restart: "no"
+
+volumes:
+  atlas_pgdata:

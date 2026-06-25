@@ -95,9 +95,11 @@ class Discovery:
         scored.sort(key=lambda x: (-x[1], x[0]))
         return scored[:top]
 
-    def route_prompt(self, query: str, *, top: int = 5) -> tuple[Optional[str], list[tuple[str, float]], float]:
-        """Level-1: return (chosen_id, top_candidates, best_score)."""
-        scored = self.rank(query, top=top)
+    def route_prompt(self, query: str, *, top: int = 5, pool_ids=None) -> tuple[Optional[str], list[tuple[str, float]], float]:
+        """Level-1: return (chosen_id, top_candidates, best_score). When ``pool_ids`` is given,
+        ranking is restricted to those agents (the network members)."""
+        pool = [self.registry.get(i) for i in pool_ids] if pool_ids is not None else None
+        scored = self.rank(query, top=top, pool=pool)
         if not scored:
             return None, [], 0.0
         return scored[0][0], scored, scored[0][1]

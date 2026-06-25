@@ -41,6 +41,25 @@ class Settings(BaseSettings):
     # Human-in-the-loop: 0 disables the auto-decision timeout (operator decides).
     hitl_timeout_seconds: float = 0.0
 
+    # Edge authentication (opt-in). When set, every /api/* request (except
+    # /api/healthz) must present this key — via the X-API-Key header, an
+    # Authorization: Bearer token, or a ?key= query param (the SSE stream, since
+    # EventSource can't set headers). Unset (default) = the edge is open.
+    api_key: str | None = Field(
+        default=None, validation_alias=AliasChoices("ATLAS_API_KEY")
+    )
+
+    # Persistence + authenticated network (opt-in). When set, Atlas mirrors the org into
+    # Postgres on first boot, persists runtime + auth/session state, and enables the
+    # "agents authenticate to join the network" model. Unset = fully in-memory (original demo).
+    # Production target: postgresql+asyncpg://… ; tests use sqlite+aiosqlite.
+    database_url: str | None = Field(
+        default=None, validation_alias=AliasChoices("ATLAS_DATABASE_URL", "DATABASE_URL")
+    )
+    # How long a network session (and its JWT) stays valid before re-authentication is needed.
+    # Default is long ("authenticate once, then communicate freely"); sessions are revocable.
+    network_session_ttl_seconds: int = 43200  # 12h
+
     # Server bind.
     host: str = "0.0.0.0"
     port: int = 8000

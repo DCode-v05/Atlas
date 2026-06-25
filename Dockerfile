@@ -21,7 +21,12 @@ RUN pip install --no-cache-dir \
     "pydantic>=2.7" \
     "pydantic-settings>=2.3" \
     "sse-starlette>=2.1" \
-    "boto3>=1.40"
+    "boto3>=1.40" \
+    "httpx>=0.27" \
+    "sqlalchemy[asyncio]>=2.0" \
+    "asyncpg>=0.29" \
+    "pyjwt[crypto]>=2.8" \
+    "cryptography>=42"
 
 COPY pyproject.toml ./
 COPY atlas/ ./atlas/

@@ -36,6 +36,9 @@ class EventType(str, Enum):
     CRON_STATE = "cron.state"
     LLM_STATUS = "llm.status"
     TRACE_SPAN = "trace.span"  # one observable agent operation (LLM call or policy step)
+    PUSH_DELIVERED = "push.delivered"  # an outbound A2A webhook delivery attempt
+    NETWORK_JOINED = "network.joined"  # an agent authenticated + joined the network
+    NETWORK_LEFT = "network.left"      # an agent's network session ended / was revoked
 
 
 #: Stable, ordered list of every event type — mirrored by the frontend.
@@ -220,3 +223,27 @@ class LlmStatusPayload(BaseModel):
     calls_429: int = 0
     calls_error: int = 0
     reason: str = ""
+
+
+class PushDeliveredPayload(BaseModel):
+    """An outbound webhook delivery attempt for a task's push-notification config."""
+
+    task_id: str
+    context_id: Optional[str] = None
+    config_id: str
+    url: str
+    ok: bool
+    status_code: Optional[int] = None
+    state: str = ""
+    final: bool = False
+
+
+class NetworkMemberPayload(BaseModel):
+    """An agent joined or left the authenticated network."""
+
+    agent_id: str
+    name: str = ""
+    department: str = ""
+    role: str = ""
+    session_id: str = ""
+    members: int = 0  # current network size

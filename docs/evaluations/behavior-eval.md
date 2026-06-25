@@ -1,5 +1,10 @@
 # Behaviour Catalogue
 
+> **⚠️ Partially stale since 2026-06-24 — the policy changed after this capture.** Out-of-scope restricted/secret
+> data now **escalates** (rule `LEAST-PRIV-ESCALATE`) instead of denying, so example **D4** ("tightens an owner's
+> escalate to an outright deny") and any `POLICY/LEAST-PRIV-DENY` references below reflect the old behaviour. The
+> hard denials (clearance, PII-purpose, PCI-no-nexus) are unchanged. Re-run to regenerate.
+
 This catalogue lists the behaviours the system actually emits, found by **running seven varied
 conversations** through the production runtime (real Mistral on Amazon Bedrock) and reading the
 full event stream of each — not by reading the code. It complements the rubric-based

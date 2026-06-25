@@ -101,6 +101,7 @@ class AgentCard(BaseModel):
     capabilities: AgentCapabilities = Field(default_factory=AgentCapabilities)
     skills: list[AgentSkill] = Field(default_factory=list)
     securitySchemes: dict[str, Any] = Field(default_factory=dict)
+    securityRequirements: list[dict[str, Any]] = Field(default_factory=list)
     interfaces: list[AgentInterface] = Field(default_factory=list)
     extensions: list[AgentExtension] = Field(default_factory=list)
     signature: Optional[str] = None
@@ -171,3 +172,33 @@ class Task(BaseModel):
     @property
     def state(self) -> TaskState:
         return self.status.state
+
+
+# ─── Push notification (webhook) config ───────────────────────────────────────
+
+
+class PushNotificationAuthentication(BaseModel):
+    """How a webhook receiver authenticates an inbound call.
+
+    A2A ``PushNotificationAuthenticationInfo``: the auth ``schemes`` the receiver
+    expects and (opaque per the spec) the ``credentials`` to present.
+    """
+
+    schemes: list[str] = Field(default_factory=list)  # e.g. ["Bearer", "ApiKey"]
+    credentials: Optional[str] = None
+
+
+class PushNotificationConfig(BaseModel):
+    """A client-registered webhook for a task's status updates (A2A ``PushNotificationConfig``)."""
+
+    id: str = Field(default_factory=lambda: new_id("pnc-"))
+    url: str
+    token: Optional[str] = None  # echoed back so the receiver can validate the call is genuine
+    authentication: Optional[PushNotificationAuthentication] = None
+
+
+class TaskPushNotificationConfig(BaseModel):
+    """Binds a :class:`PushNotificationConfig` to a task (A2A ``TaskPushNotificationConfig``)."""
+
+    taskId: str
+    pushNotificationConfig: PushNotificationConfig

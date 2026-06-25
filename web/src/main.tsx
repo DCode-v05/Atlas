@@ -14,6 +14,8 @@ async function boot() {
     // eslint-disable-next-line no-console
     console.error("[atlas] failed to load org", e);
   }
+  void useStore.getState().loadNetwork(); // probe the authenticated network (no-op/off if DB disabled)
+  await useStore.getState().loadHistory(); // replay persisted conversations BEFORE the live stream starts
   connectSSE();
 }
 

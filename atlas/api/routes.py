@@ -8,10 +8,16 @@ touches asyncio primitives (spawning scenarios, resolving HITL futures) is an
 from __future__ import annotations
 
 import asyncio
+import base64
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from sse_starlette.sse import EventSourceResponse
 
+from atlas.a2a.models import (
+    PushNotificationAuthentication,
+    PushNotificationConfig,
+    TaskPushNotificationConfig,
+)
 from atlas.api.projects import build_project_view, list_projects
 from atlas.api.viewmodels import agent_card_view, build_org_view, thread_view
 from atlas.config import get_settings
@@ -107,6 +113,117 @@ def task_detail(task_id: str, request: Request):
     if t is None:
         raise HTTPException(404, "unknown task")
     return t.model_dump(mode="json")
+
+
+# ── push-notification configs (A2A pushNotificationConfig/Set·Get·List·Delete) ──
+# A client registers a webhook for a task; Atlas POSTs a status update to it on
+# every task.state change (delivery in atlas/push). The task must exist first.
+@router.post("/tasks/{task_id}/push-notification-configs")
+def push_config_set(task_id: str, request: Request, payload: dict = Body(...)):
+    rt = _rt(request)
+    if task_id not in rt.tasks:
+        raise HTTPException(404, "unknown task")
+    url = (payload.get("url") or "").strip()
+    if not url:
+        raise HTTPException(400, "url is required")
+    auth = payload.get("authentication")
+    cfg = PushNotificationConfig(
+        url=url,
+        token=payload.get("token"),
+        authentication=PushNotificationAuthentication(**auth) if isinstance(auth, dict) else None,
+    )
+    rt.push.set_config(task_id, cfg)
+    return TaskPushNotificationConfig(taskId=task_id, pushNotificationConfig=cfg).model_dump(mode="json")
+
+
+@router.get("/tasks/{task_id}/push-notification-configs")
+def push_config_list(task_id: str, request: Request):
+    rt = _rt(request)
+    if task_id not in rt.tasks:
+        raise HTTPException(404, "unknown task")
+    return {
+        "taskId": task_id,
+        "configs": [c.model_dump(mode="json") for c in rt.push.list_configs(task_id)],
+    }
+
+
+@router.get("/tasks/{task_id}/push-notification-configs/{config_id}")
+def push_config_get(task_id: str, config_id: str, request: Request):
+    rt = _rt(request)
+    cfg = rt.push.get_config(task_id, config_id)
+    if cfg is None:
+        raise HTTPException(404, "unknown push-notification config")
+    return TaskPushNotificationConfig(taskId=task_id, pushNotificationConfig=cfg).model_dump(mode="json")
+
+
+@router.delete("/tasks/{task_id}/push-notification-configs/{config_id}")
+def push_config_delete(task_id: str, config_id: str, request: Request):
+    rt = _rt(request)
+    if not rt.push.delete_config(task_id, config_id):
+        raise HTTPException(404, "unknown push-notification config")
+    return {"ok": True, "deleted": config_id}
+
+
+# ── authenticated network (Ed25519 challenge/response → scoped JWT; requires the DB) ──
+def _net(request: Request):
+    rt = _rt(request)
+    if rt.network is None:
+        raise HTTPException(503, "the authenticated network requires the database (set ATLAS_DATABASE_URL)")
+    return rt.network
+
+
+@router.get("/network")
+def network_status(request: Request):
+    members = _net(request).members()
+    return {"count": len(members), "members": members}
+
+
+@router.get("/network/challenge")
+async def network_challenge(agent_id: str, request: Request):
+    ch = await _net(request).create_challenge(agent_id)
+    if ch is None:
+        raise HTTPException(404, "unknown agent")
+    return ch
+
+
+@router.post("/network/authenticate")
+async def network_authenticate(request: Request, payload: dict = Body(...)):
+    net = _net(request)
+    agent_id, nonce, sig = payload.get("agent_id"), payload.get("nonce"), payload.get("signature")
+    if not (agent_id and nonce and sig):
+        raise HTTPException(400, "agent_id, nonce and signature (base64) are required")
+    try:
+        signature = base64.b64decode(sig)
+    except Exception:
+        raise HTTPException(400, "signature must be base64-encoded")
+    res = await net.authenticate(agent_id, nonce, signature)
+    if res is None:
+        raise HTTPException(401, "authentication failed")
+    return res
+
+
+@router.post("/network/agents/{agent_id}/join")
+async def network_join(agent_id: str, request: Request):
+    """Operator one-click join: runs the real challenge/response server-side with the agent's key."""
+    res = await _net(request).authenticate_oneclick(agent_id)
+    if res is None:
+        raise HTTPException(404, "unknown agent")
+    return res
+
+
+@router.post("/network/agents/{agent_id}/disconnect")
+async def network_disconnect(agent_id: str, request: Request):
+    net = _net(request)
+    ok = await net.disconnect(agent_id)
+    return {"ok": ok, "agent_id": agent_id, "count": len(net.members())}
+
+
+@router.post("/network/verify")
+def network_verify(request: Request, payload: dict = Body(...)):
+    claims = _net(request).verify_token(payload.get("token") or "")
+    if claims is None:
+        raise HTTPException(401, "invalid, expired, or revoked token")
+    return {"valid": True, "claims": claims}
 
 
 @router.get("/threads/{context_id}")
@@ -206,3 +323,75 @@ async def events(request: Request):
             broker.unsubscribe(queue)
 
     return EventSourceResponse(generator())
+
+
+@router.get("/history")
+async def history(request: Request, limit: int = 30):
+    """Replay the persisted conversation record (header + messages + share-decisions + task
+    state) so the timeline and History survive a refresh/restart. Requires the DB; in-memory
+    mode returns nothing (the live SSE stream is the only source then)."""
+    rt = _rt(request)
+    if rt.db is None:
+        return {"conversations": []}
+    from sqlalchemy import select
+
+    from atlas.db.models import ConversationRow, MessageRow, ShareDecisionRow, TaskRow
+
+    limit = max(1, min(int(limit), 100))
+    async with rt.db.session() as s:
+        convos = (await s.execute(
+            select(ConversationRow)
+            .order_by(ConversationRow.created_at.desc(), ConversationRow.context_id.desc())
+            .limit(limit)
+        )).scalars().all()
+        cids = [c.context_id for c in convos]
+        if not cids:
+            return {"conversations": []}
+        msgs = (await s.execute(
+            select(MessageRow).where(MessageRow.context_id.in_(cids)).order_by(MessageRow.seq.asc())
+        )).scalars().all()
+        decs = (await s.execute(
+            select(ShareDecisionRow).where(ShareDecisionRow.context_id.in_(cids)).order_by(ShareDecisionRow.id.asc())
+        )).scalars().all()
+        tasks = (await s.execute(select(TaskRow).where(TaskRow.context_id.in_(cids)))).scalars().all()
+
+    def ms(epoch) -> int:  # persisted ts is epoch SECONDS; the UI timeline sorts in milliseconds
+        return int(epoch or 0) * 1000
+
+    msgs_by: dict = {}
+    for m in msgs:
+        msgs_by.setdefault(m.context_id, []).append({
+            "message_id": m.id, "sender": m.sender, "recipients": m.recipients or [], "mode": m.mode,
+            "role": m.role, "text": m.text, "thinking": m.thinking, "intent": m.intent,
+            "thread_id": m.thread_id, "group_id": m.group_id, "ts": ms(m.ts),
+        })
+    decs_by: dict = {}
+    for d in decs:
+        decs_by.setdefault(d.context_id, []).append({
+            "context_id": d.context_id, "item_id": d.item_id, "title": d.title, "sender": d.sender,
+            "recipient": d.recipient, "sensitivity": d.sensitivity, "rule_id": d.rule_id,
+            "reason": d.reason, "summary": d.summary, "kind": d.kind, "ts": ms(d.ts),
+        })
+    state_by = {t.context_id: t.state for t in tasks}
+    conversations = [{
+        "context_id": c.context_id, "prompt": c.prompt, "kind": c.kind, "routed_to": c.routed_to,
+        "routed_to_name": c.routed_to_name, "task_id": c.task_id,
+        "state": state_by.get(c.context_id, "completed"), "ts": ms(c.created_at),
+        "messages": msgs_by.get(c.context_id, []), "decisions": decs_by.get(c.context_id, []),
+    } for c in convos]
+    return {"conversations": conversations}
+
+
+@router.post("/history/clear")
+async def history_clear(request: Request):
+    """Wipe the conversation/history record — the DB rows AND the in-memory task registry +
+    event history — while leaving the org and the network membership untouched."""
+    rt = _rt(request)
+    cleared: dict = {}
+    if rt.db is not None:
+        from atlas.db import clear_history
+
+        cleared = await clear_history(rt.db)
+    rt.tasks.clear()           # in-memory task registry
+    rt.broker.history.clear()  # so a reconnecting SSE client can't replay the old events
+    return {"ok": True, "cleared": cleared}

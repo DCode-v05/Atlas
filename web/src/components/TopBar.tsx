@@ -10,12 +10,14 @@ export function TopBar() {
   const hitlCount = useStore((s) => s.hitl.length);
   const llm = useStore((s) => s.llm);
   const setView = useStore((s) => s.setView);
+  const dispatch = useStore((s) => s.dispatch);
 
-  const submit = async (p?: string) => {
+  const submit = (p?: string) => {
     const prompt = (p ?? text).trim();
     if (!prompt) return;
     setText("");
-    try { await api.prompt(prompt); } catch (e) { console.error(e); }
+    setView("convo");        // jump to the live conversation immediately
+    void dispatch(prompt);   // optimistic: the prompt renders now, before routing returns
   };
   const toggleCron = async () => {
     try { await api.cron(!cron.running); } catch (e) { console.error(e); }

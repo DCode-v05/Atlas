@@ -16,26 +16,29 @@ const EXAMPLES = [
 export function ConversationTimeline() {
   const order = useStore((s) => s.contextOrder);
   const contexts = useStore((s) => s.contexts);
+  const archived = useStore((s) => s.archived);
   const cron = useStore((s) => s.cron);
 
-  // Only LIVE goals here — completed ones move to the History tab.
-  const live = order.filter((cid) => {
+  // Show live goals AND a just-completed one — it stays until the NEXT dispatch (which archives it)
+  // or a refresh (which archives replayed history). Archived ⇒ History tab only.
+  const shown = order.filter((cid) => !archived[cid]);
+  const activeCount = shown.filter((cid) => {
     const st = contexts[cid]?.state;
     return st !== "completed" && st !== "failed";
-  });
+  }).length;
 
-  if (live.length === 0) return <EmptyState />;
+  if (shown.length === 0) return <EmptyState />;
 
   return (
     <div className="h-full overflow-y-auto px-3 py-3">
       <div className="flex items-center gap-2 mb-2.5 px-0.5">
         <Radio size={13} className={cron.running ? "animate-flicker" : ""} style={{ color: cron.running ? "var(--gold)" : "var(--ok)" }} />
         <span className="eyebrow">Live conversations</span>
-        <span className="mono text-[9.5px] text-faint">· {live.length} active</span>
+        <span className="mono text-[9.5px] text-faint">· {activeCount} active</span>
         {cron.running && <span className="mono text-[9.5px]" style={{ color: "var(--gold)" }}>· simulation on · new goal {cron.remaining.toFixed(0)}s</span>}
       </div>
       <div className="flex flex-col gap-2.5">
-        {live.map((cid) => <ConversationCard key={cid} cid={cid} />)}
+        {shown.map((cid) => <ConversationCard key={cid} cid={cid} />)}
       </div>
     </div>
   );
@@ -67,7 +70,7 @@ function ConversationCard({ cid }: { cid: string }) {
   const shown = rows.slice(-CAP);
   const hidden = rows.length - shown.length;
 
-  const state = ctx?.state;
+  const state = ctx?.pending ? "routing…" : ctx?.state;
   const stateColor = state === "completed" ? "var(--ok)" : state === "input-required" ? "var(--violet)" : "var(--gold)";
 
   return (
@@ -169,6 +172,22 @@ function Agent({ id, name, agents }: { id: string; name: string; agents: any }) 
 }
 
 function MsgRow({ m, agents, nameOf }: { m: ChatMessage; agents: any; nameOf: (id: string) => string }) {
+  // the operator's own prompt — a right-aligned "You → <agent>" bubble (chat convention)
+  if (m.sender === "operator") {
+    const to = m.recipients.length ? m.recipients.map(nameOf).join(", ") : "routing…";
+    return (
+      <div className="flex justify-end">
+        <div className="rounded-md px-2.5 py-1.5 max-w-[82%]" style={{ background: "var(--accent-soft)", border: "1px solid rgba(182,242,74,0.45)" }}>
+          <div className="flex items-center gap-1.5 justify-end mb-0.5">
+            <span className="text-[11px] font-semibold" style={{ color: "var(--accent)" }}>Operator</span>
+            <ArrowRight size={11} className="text-faint shrink-0" />
+            <span className="text-[10.5px] text-muted truncate max-w-[150px]">{to}</span>
+          </div>
+          <div className="text-[11.5px] leading-snug text-right text-ink">{m.text}</div>
+        </div>
+      </div>
+    );
+  }
   const group = m.mode === "group";
   const recip = group ? `group · ${m.recipients.length}` : m.recipients.map(nameOf).join(", ");
   return (
@@ -203,7 +222,8 @@ function DecisionRow({ d, nameOf }: { d: Decision; nameOf: (id: string) => strin
 }
 
 function EmptyState() {
-  const fire = (p: string) => api.prompt(p).catch(console.error);
+  const dispatch = useStore((s) => s.dispatch);
+  const fire = (p: string) => void dispatch(p); // optimistic, same as the top-bar
   const toggleCron = () => api.cron(true).catch(console.error);
   return (
     <div className="h-full grid place-items-center p-6">

@@ -22,6 +22,7 @@ class HitlQueue:
         self.pending: dict[str, HitlRequest] = {}
         self.resolved: list[HitlRequest] = []
         self._futures: dict[str, asyncio.Future] = {}
+        self.dbwriter = None  # set by build_runtime; durable write-through when persistence is on
 
     def create(self, req: HitlRequest) -> asyncio.Future:
         """Enqueue a request, emit ``hitl.requested``, return a future to await."""
@@ -54,6 +55,13 @@ class HitlQueue:
             ),
             context_id=req.context_id,
         )
+        if self.dbwriter is not None:
+            self.dbwriter.record("hitl_create", {
+                "request_id": req.request_id, "task_id": req.task_id, "context_id": req.context_id,
+                "owner_agent_id": req.owner_agent_id, "requester_agent_id": req.requester_agent_id,
+                "item_id": req.item_id, "item_title": req.item_title, "sensitivity": req.sensitivity.value,
+                "proposed_outcome": req.proposed_outcome.value, "reason": req.reason,
+            })
         return fut
 
     async def wait(self, request_id: str, timeout: float = 0.0) -> HitlRequest:
@@ -90,6 +98,11 @@ class HitlQueue:
             ),
             context_id=req.context_id,
         )
+        if self.dbwriter is not None:
+            self.dbwriter.record("hitl_resolve", {
+                "request_id": request_id, "state": req.state,
+                "decided_by": decided_by, "decided_outcome": req.decided_outcome.value,
+            })
         fut = self._futures.get(request_id)
         if fut is not None and not fut.done():
             fut.set_result(req)

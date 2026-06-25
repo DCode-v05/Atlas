@@ -37,6 +37,8 @@ from atlas.org.taxonomy import (
     ORG_NAME,
     OPS_LEXICON,
     SECRET_TEMPLATES,
+    SECURITY_REQUIREMENTS,
+    SECURITY_SCHEMES,
     SKILL_CATALOG,
     FIRST_NAMES,
     LAST_NAMES,
@@ -108,6 +110,18 @@ def _skills_for(dept: Department, level: Level, rng: Random) -> list[AgentSkill]
 
 def generate_org(seed: int) -> OrgSnapshot:
     rng = Random(seed)
+    # Agent ids are SEP-<16 digits>: opaque/non-sequential, but DETERMINISTIC from the seed
+    # (a dedicated RNG so id generation never perturbs skill sampling). Same seed ⇒ same ids.
+    id_rng = Random(seed ^ 0x53455049)
+    _used_ids: set[str] = set()
+
+    def _new_agent_id() -> str:
+        while True:
+            aid = f"SEP-{id_rng.randint(0, 10**16 - 1):016d}"
+            if aid not in _used_ids:
+                _used_ids.add(aid)
+                return aid
+
     agents: dict[str, OrgAgent] = {}
     items: dict[str, ContextItem] = {}
     teams: dict[str, list[str]] = {}
@@ -121,7 +135,7 @@ def generate_org(seed: int) -> OrgSnapshot:
 
     def make_agent(dept: Department, role_title: str, level: Level, reports_to: str | None) -> OrgAgent:
         nonlocal idx
-        aid = f"AGT-{idx + 1:03d}"
+        aid = _new_agent_id()
         nf, nl = len(FIRST_NAMES), len(LAST_NAMES)
         # the `+ idx // nf` block offset breaks the period-N collision so all
         # 100 names are unique (no two agents share a name).
@@ -229,8 +243,11 @@ def generate_org(seed: int) -> OrgSnapshot:
             interfaces=[AgentInterface(transport="in-process", url=f"atlas://agent/{ag.id}")],
             capabilities=AgentCapabilities(
                 streaming=True,
+                pushNotifications=True,  # backed by the webhook delivery subsystem (atlas/push)
                 extensions=[AgentExtension(uri=NEED_TO_KNOW_EXT), AgentExtension(uri=COORDINATION_EXT)],
             ),
+            securitySchemes=dict(SECURITY_SCHEMES),
+            securityRequirements=[dict(r) for r in SECURITY_REQUIREMENTS],
             extensions=[profile_to_extension(ag.profile)],
         )
 

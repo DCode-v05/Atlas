@@ -226,8 +226,10 @@ own concern; it is encoded per owner engine, and the envelope just carries the i
 1. **Add a transport binding.** Atlas A2A is in-process today. Define a "september-engine" transport and put the
    engine's `/execute` address on the card. Send-message becomes a `POST /execute`; streaming becomes the engine
    stream. This finally gives Atlas a real network transport.
-2. **Fill in the security schemes.** Declare the engine API key on the card. This closes one of the gaps listed
-   in the A2A compliance document, where the security-schemes field exists but is always empty.
+2. **Extend the security schemes to engine-to-engine calls.** Atlas already declares the five A2A scheme types
+   on every card and enforces an opt-in API key at its edge (the A2A compliance document's §7); the engine
+   integration adds a per-engine API key on the card so authentication spans engine-to-engine `/execute` calls,
+   not just the operator edge.
 3. **Map identity.** The A2A agent id maps to the engine's user or engine id; the card's address maps to the
    engine's address from the fleet lookup.
 4. **Map task to thread, and every task state to the engine's done-status,** per the mapping above. The shared
@@ -242,8 +244,9 @@ own concern; it is encoded per owner engine, and the envelope just carries the i
    closes a second gap from the compliance document (the missing `message/stream`). The adapter maps the block
    lifecycle to A2A status and artifact updates.
 
-The net effect on the A2A compliance picture: two of its biggest gaps (security schemes and task streaming)
-become implemented, and the in-process transport non-goals become a real "september-engine" transport.
+The net effect on the A2A compliance picture: a remaining gap (task streaming) becomes implemented, the edge
+authentication Atlas already has extends across the fleet, and the in-process transport non-goals become a real
+"september-engine" transport.
 
 ## 3. Phased plan
 

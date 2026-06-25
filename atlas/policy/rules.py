@@ -10,7 +10,7 @@ the owner agent's LLM decision together with every firing rule by taking the
 Frameworks referenced (rule_id ← source):
   CLEARANCE-GATE   Bell–LaPadula "no read up"; NIST 800-53 AC-3
   NEED-TO-KNOW     PCI-DSS v4.0 Req 7 (business need-to-know); NIST 800-53 AC-6
-  LEAST-PRIV-DENY  PCI-DSS v4.0 Req 7 "deny all" default; AWS IAM deny-by-default
+  LEAST-PRIV-ESCALATE  PCI-DSS v4.0 Req 7 / AWS IAM — out-of-scope restricted/secret → human review (not auto-deny)
   PCI-SECRET-*     PCI-DSS v4.0 Req 3 & 7 (cardholder/secret protection)
   PII-PURPOSE      GDPR Art. 6 (lawful basis) / Art. 5(1)(b) (purpose limitation)
   PII-MINIMISE     GDPR Art. 5(1)(c); HIPAA §164.502(b) minimum-necessary
@@ -139,11 +139,14 @@ def _r_need_to_know(c: Ctx):
     return None
 
 
-def _r_least_priv_deny(c: Ctx):
+def _r_least_priv_escalate(c: Ctx):
+    # Soft floor: out-of-scope restricted/secret data is NOT auto-shared, but rather than a flat
+    # deny it is routed to a human, who may grant a legitimate exception (e.g. a justified
+    # cross-team need). The hard denials — clearance / PII-purpose / PCI-no-nexus — still DENY.
     if (not c.scoped) and c.sens >= _RESTRICTED and not c.incident:
-        return ShareOutcome.DENY, (
-            "restricted/secret data has no business leaving its boundary absent an explicit need — "
-            "deny-by-default (PCI Req 7 'deny all' / AWS IAM)."
+        return ShareOutcome.ESCALATE, (
+            "restricted/secret data requested outside its need-to-know boundary — not auto-shared; "
+            "an independent human decides whether to grant the exception (least-privilege; PCI-DSS Req 7 / AWS IAM)."
         )
     return None
 
@@ -248,7 +251,7 @@ def _r_officer_self_review(c: Ctx):
 RULES: tuple[tuple[str, object], ...] = (
     ("CLEARANCE-GATE", _r_clearance_gate),
     ("NEED-TO-KNOW", _r_need_to_know),
-    ("LEAST-PRIV-DENY", _r_least_priv_deny),
+    ("LEAST-PRIV-ESCALATE", _r_least_priv_escalate),
     ("PCI-SECRET", _r_pci_secret),
     ("PII-PURPOSE", _r_pii_purpose),
     ("PII-MINIMISE", _r_pii_minimise),

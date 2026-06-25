@@ -102,6 +102,7 @@ class Orchestrator:
         hitl_timeout: float = 0.0,
         step_delay: float = 0.45,
         cron_max_inflight: int = 3,
+        network=None,
     ) -> None:
         self.snapshot = snapshot
         self.registry = registry
@@ -116,6 +117,8 @@ class Orchestrator:
         self.hitl_timeout = hitl_timeout
         self.step_delay = step_delay
         self.cron_max_inflight = cron_max_inflight
+        self.network = network  # NetworkService when the authenticated-network mode is live, else None
+        self.dbwriter = None  # set by build_runtime; durable write-through when persistence is on
         self._cron_active = 0
         self._bg: set[asyncio.Task] = set()
         # The deterministic compliance Policy Engine reviews every owner share decision
@@ -126,6 +129,17 @@ class Orchestrator:
             self._policy_officer_id: Optional[str] = snapshot.head_of(Department.SECURITY)
         except KeyError:
             self._policy_officer_id = None
+
+    # ── network membership (gating is OFF unless the authenticated network is live) ──
+    def _gating(self) -> bool:
+        return self.network is not None and getattr(self.network, "active", False)
+
+    def _is_member(self, agent_id: str) -> bool:
+        return (not self._gating()) or self.network.is_member(agent_id)
+
+    def _pool_ids(self) -> Optional[set]:
+        """The agent ids allowed to communicate (joined network members), or None = all."""
+        return self.network.member_ids() if self._gating() else None
 
     # ── public entry points ────────────────────────────────────────────────
     def _org_summary(self) -> str:
@@ -157,29 +171,50 @@ class Orchestrator:
         if not ok:
             self.router.reject(prompt, reason or GATE_REASON)
             return {"rejected": True, "reason": reason or GATE_REASON}
-        # Routing is LLM-decided: Mistral reads the FULL company directory (all 100
-        # agent cards) and picks the best-fit owner — no deterministic shortlist.
-        # A bare greeting / social message has no routable tokens; the deterministic
-        # scorer is kept ONLY as a fallback for when the LLM is unavailable.
+        # Network membership: routing/communication is restricted to agents that have
+        # authenticated to the network. An empty network has no one to route to.
+        pool = self._pool_ids()  # None = gating off (all agents); else the joined-member set
+        if pool is not None and not pool:
+            msg = "No agents are in the network yet — authenticate one or more agents to the network first."
+            self.router.reject(prompt, msg)
+            return {"rejected": True, "reason": msg}
+
+        def _fallback_agent() -> str:
+            return self.snapshot.ceo_id if (pool is None or self.snapshot.ceo_id in pool) else next(iter(pool))
+
+        # Routing is LLM-decided: Mistral reads the directory (restricted to network
+        # members when gating is on) and picks the best-fit owner. A bare greeting has no
+        # routable tokens; the deterministic scorer is the fallback when the LLM is down.
         greeting = not set(tokenize(prompt))
+        # Network-scope gate: when membership gating is on, the prompt must be answerable by an
+        # agent that is actually IN the network. If the relevant team hasn't joined, no member is
+        # a plausible owner, so it's out of scope for the CURRENT network — reject rather than
+        # force it onto an unrelated member. (Skipped when gating is off: the whole org is available.)
+        if pool is not None and not greeting:
+            _, member_scored = self.router.route_prompt(prompt, pool_ids=pool)
+            if not member_scored or member_scored[0][1] < self.router.gate_floor:
+                msg = ("No agent currently in the network can handle this request — the team it "
+                       "needs hasn’t joined the network yet.")
+                self.router.reject(prompt, msg)
+                return {"rejected": True, "reason": msg}
         route_live = False
         if greeting:
-            chosen = self.snapshot.ceo_id
+            chosen = _fallback_agent()
         else:
             chosen = None
             if self.llm.available:
                 try:
-                    pick = await self.llm.route(prompt, self._agent_directory())
-                    if pick in self.registry.agents:
+                    pick = await self.llm.route(prompt, self._agent_directory(pool))
+                    if pick in self.registry.agents and (pool is None or pick in pool):
                         chosen = pick
                         route_live = True
                 except Exception:
                     chosen = None
             if chosen is None:  # LLM unavailable / invalid pick → deterministic safety net
-                chosen, _ = self.router.route_prompt(prompt)
+                chosen, _ = self.router.route_prompt(prompt, pool_ids=pool)
             if chosen is None:  # nothing matched even deterministically → treat as social
                 greeting = True
-                chosen = self.snapshot.ceo_id
+                chosen = _fallback_agent()
         scored = [(chosen, 1.0)]
 
         context_id = new_id("ctx-")
@@ -199,6 +234,11 @@ class Orchestrator:
             ),
             context_id=context_id,
         )
+        if self.dbwriter is not None:  # persist the conversation header so it survives a refresh/restart
+            self.dbwriter.record("conversation", {
+                "context_id": context_id, "prompt": prompt, "kind": "user",
+                "routed_to": chosen, "routed_to_name": agent.name, "task_id": task.id,
+            })
         self._spawn(
             self._run_greeting(prompt, chosen, context_id, task.id) if greeting
             else self._run_scenario(prompt, chosen, context_id, task.id)
@@ -217,6 +257,8 @@ class Orchestrator:
         never spends a gate call against the rate-limit budget."""
         if self._cron_active >= self.cron_max_inflight:
             return None
+        if not self._is_member(initiator_id):
+            return None  # only agents authenticated to the network initiate goals
         self._cron_active += 1
         context_id = new_id("cron-")
         task = self.router.new_task(context_id, message=prompt, role="agent")
@@ -231,6 +273,11 @@ class Orchestrator:
             ),
             context_id=context_id,
         )
+        if self.dbwriter is not None:
+            self.dbwriter.record("conversation", {
+                "context_id": context_id, "prompt": prompt, "kind": "cron",
+                "routed_to": initiator_id, "routed_to_name": agent.name, "task_id": task.id,
+            })
         self._spawn(self._run_scenario(prompt, initiator_id, context_id, task.id, cron=True))
         return context_id
 
@@ -247,6 +294,7 @@ class Orchestrator:
             await self._pause()
 
             needs = self._identify_needs(agent, prompt)
+            needs = [(it, rel) for (it, rel) in needs if self._is_member(it.owner_agent_id)]  # source only from members
             group_members = await self._decide_group(agent, prompt, context_id)
             grouped = bool(group_members)
 
@@ -351,7 +399,7 @@ class Orchestrator:
         if not agent.profile.teams:
             return []
         team_id = agent.profile.teams[0]
-        roster_ids = [m for m in self.snapshot.teams.get(team_id, []) if m != agent.id]
+        roster_ids = [m for m in self.snapshot.teams.get(team_id, []) if m != agent.id and self._is_member(m)]
         if not roster_ids:
             return []
         if self.llm.available:
@@ -513,7 +561,7 @@ class Orchestrator:
 
     async def _consult_manager(self, agent: OrgAgent, prompt: str, context_id: str, task_id: str) -> None:
         mgr_id = agent.profile.reports_to
-        if not mgr_id or mgr_id not in self.registry.agents:
+        if not mgr_id or mgr_id not in self.registry.agents or not self._is_member(mgr_id):
             return
         task = self.router.tasks[task_id]
         mgr = self.registry.get(mgr_id)
@@ -545,7 +593,7 @@ class Orchestrator:
         team_id = agent.profile.teams[0]
         if member_ids is None:  # no LLM selection → the whole team (deterministic fallback)
             member_ids = [m for m in self.snapshot.teams.get(team_id, []) if m != agent.id]
-        members = [agent.id] + [m for m in member_ids if m != agent.id]
+        members = [agent.id] + [m for m in member_ids if m != agent.id and self._is_member(m)]
         topic = self._topic(prompt)
         group = self.groups.create(context_id, team_id, topic, members, initiator=agent.id)
         self.router.announce_group(group)
@@ -631,6 +679,13 @@ class Orchestrator:
             ),
             context_id=context_id,
         )
+        if self.dbwriter is not None:
+            self.dbwriter.record("share_decision", {
+                "context_id": context_id, "kind": getattr(event_type, "value", str(event_type)).split(".")[-1],
+                "item_id": item.item_id, "title": item.title, "sender": owner.id, "recipient": agent.id,
+                "sensitivity": item.sensitivity.value, "rule_id": rule or decision.rule_id,
+                "reason": decision.reason, "summary": summary,
+            })
 
     def _trace(self, agent_id: str, kind: str, summary: str, *, live: bool = False,
                context_id: Optional[str] = None, detail: Optional[str] = None) -> None:
@@ -768,17 +823,20 @@ class Orchestrator:
         skills = ", ".join(s.name for s in ag.card.skills[:3])
         return f"{ag.profile.role_title}, {ag.profile.department.value} — {skills}"
 
-    def _agent_directory(self) -> str:
-        """One compact 'card' per agent — the whole company the LLM router chooses
-        from. Cached, since the org is immutable for a given seed."""
+    def _dir_line(self, ag) -> str:
+        p = ag.profile
+        tags = ", ".join(sorted(ag.card.skill_tags)[:6])
+        return f"{ag.id} | {ag.name} — {p.role_title}, {p.department.value}, L{int(p.level)} | skills: {tags}"
+
+    def _agent_directory(self, pool=None) -> str:
+        """One compact 'card' per routable agent — the company the LLM router chooses from.
+        When the network is gated this is restricted to joined members; otherwise it is the
+        whole company (cached, since the org is immutable for a given seed)."""
+        if pool is not None:
+            return "\n".join(self._dir_line(self.registry.get(i)) for i in pool)
         cached = getattr(self, "_directory_cache", None)
         if cached is None:
-            lines = []
-            for ag in self.snapshot.agents.values():
-                p = ag.profile
-                tags = ", ".join(sorted(ag.card.skill_tags)[:6])
-                lines.append(f"{ag.id} | {ag.name} — {p.role_title}, {p.department.value}, L{int(p.level)} | skills: {tags}")
-            cached = "\n".join(lines)
+            cached = "\n".join(self._dir_line(ag) for ag in self.snapshot.agents.values())
             self._directory_cache = cached
         return cached
 

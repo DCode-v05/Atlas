@@ -17,8 +17,10 @@ they finish work.
 
 Two layers, never conflated:
 
-- **External edge** (`atlas/api`, `atlas/events`): the only real sockets. A REST
-  API + an **SSE** stream between the browser and the backend.
+- **External edge** (`atlas/api`, `atlas/events`, `atlas/push`): the only real sockets. A REST
+  API + an **SSE** stream between the browser and the backend, with **opt-in API-key edge auth**
+  (`ATLAS_API_KEY`, 401/403; off by default) and **outbound A2A push-notification webhooks** that POST
+  task-state updates to clients registered per task.
 - **Internal bus** (`atlas/bus`): agent↔agent communication is in-process Python
   dispatch through a central **Router** that reproduces A2A method semantics
   (`message/send`, `tasks/get`, …). The Router is the single chokepoint where
@@ -80,14 +82,17 @@ owner, item, intent)` returns `SHARE` / `REDACT` / `DENY` / `ESCALATE`(→HITL) 
 own judgement, weighing sensitivity, the requester's role/clearance/teams/projects, and their
 stated reason — it may even choose to share a confidential record. **Cost/latency pre-gate:**
 the deterministic floor (Layer 2) is computed *first*, and when it already forces a **DENY or
-ESCALATE** — every denial, and every secret (four-eyes) — the owner's LLM is **skipped** (the
-model cannot loosen a deny; a secret always needs a human regardless), and the policy decides
+ESCALATE** — every denial, and everything escalated (secrets via four-eyes, out-of-scope
+restricted) — the owner's LLM is **skipped** (the model cannot loosen a deny, and an escalation
+already needs a human regardless), and the policy decides
 outright — metered as `policy_pregates`, traced as a `decide_share` span marked `live=False`
 ("SKIPPED — policy pre-gate"). The model is consulted only where its judgement can still change
 the result (SHARE / REDACT floors). If the owner's LLM is unreachable on that remaining path,
 `_decide_share` does **not** decide in code — it **ESCALATEs to the human operator** (HITL,
 `rule_id="LLM-UNAVAILABLE"`). So the call is the model's, the policy's (denials/secrets), or a
-person's — never an arbitrary outcome matrix's. Live owner decisions trace as a `decide_share`
+person's — never an arbitrary outcome matrix's. (Soft floor: out-of-scope restricted/secret data
+now ESCALATEs rather than hard-denying — a human decides the exception; clearance, PII-purpose, and
+PCI-no-nexus stay hard DENY.) Live owner decisions trace as a `decide_share`
 span (`live=True`).
 
 **Layer 2 — the deterministic Policy Engine (compliance review).** The owner's decision then
@@ -95,12 +100,12 @@ passes through the **`atlas/policy` Policy Engine**, a **tighten-only ABAC** con
 **tighten** it (redact / escalate / deny) but never loosen — the auditable, codified compliance
 floor a real security/compliance function provides (it replaced the former LLM "Policy Officer"
 agent). ~11 single-action rules — clearance / no-read-up · need-to-know · least-privilege
-default-deny · PCI payment-secret · GDPR PII purpose+minimisation · HR-comp · SOX MNPI ·
+escalate (soft floor) · PCI payment-secret · GDPR PII purpose+minimisation · HR-comp · SOX MNPI ·
 cross-department · secret four-eyes/SoD · officer self-review, each citing a named framework
 (NIST 800-53, PCI-DSS, GDPR, ISO 27001, Bell–LaPadula, XACML, AWS IAM) — are folded
 **most-restrictive-wins** over `SHARE < REDACT < ESCALATE < DENY`, seeded with the owner's
 decision (result ≥ owner's ⇒ tighten-only). The **same floor doubles as a pre-gate**: computed
-*before* the owner's LLM call, it short-circuits denials and secrets so the model isn't asked
+*before* the owner's LLM call, it short-circuits denials and escalations (secrets, out-of-scope restricted) so the model isn't asked
 (see Layer 1). Each review is a `policy_review` trace span (`live=False` — deterministic)
 attributed to the Security head (the compliance authority); a tighten re-stamps the decision
 `rule_id="POLICY/<rule>"`. `policy_reviews` / `policy_overrides` (tightened a real owner decision)
@@ -134,7 +139,7 @@ compliance floor (`atlas/policy`; see `docs/policy.md`). The cron path skips the
 prompt → org-scope gate (LLM-judged) → Level-1 route (→ best agent) → open Task →
   agent identifies context needs → Level-2 discovery (→ owners) →
     for each owner: ask (with intent) → Policy pre-gate (deterministic floor):
-        · floor already DENY/ESCALATE (denials, secrets) → decide outright, skip the owner LLM
+        · floor already DENY/ESCALATE (denials, secrets, out-of-scope restricted) → decide outright, skip the owner LLM
         · else → owner LLM decides → Policy Engine reviews (tighten-only)
       → SHARE / REDACT / DENY / ESCALATE→HITL (task input-required, operator approves) →
     or form a GROUP session when Mistral decides to coordinate the team →
@@ -190,9 +195,10 @@ uv run python -m atlas                    # backend on :8000  (serves web/dist i
 cd web && npm install && npm run dev      # → http://localhost:5173 (proxies /api to :8000)
 ```
 
-**Tests:** `uv run pytest` (68 tests: org golden snapshot, orchestrator HITL flow,
+**Tests:** `uv run pytest` (78 tests: org golden snapshot, orchestrator HITL flow,
 owner-LLM share decision + deterministic policy-engine rules, group need-to-know,
-LLM wiring + payload guard, Bedrock-credential requirement, cron, API integration).
+LLM wiring + payload guard, Bedrock-credential requirement, cron, API integration,
+push-notification webhook delivery, edge-auth + security schemes).
 Tests inject a fake LLM double (`tests/conftest.py`, `available=True`, authors
 deterministic text), so they run without a key — it is never used by the app.
 
@@ -204,7 +210,31 @@ deterministic text), so they run without a key — it is never used by the app.
 `AWS_SECRET_ACCESS_KEY` — **required** · `AWS_REGION` (us-east-1) · `ATLAS_SEED` (42) ·
 `ATLAS_CRON_LOOP` (false = 15s burst; true = continuous) · `ATLAS_CRON_BURST_SECONDS` (15) ·
 `ATLAS_CRON_GOAL_SECONDS` (30, continuous-goal cadence) · `ATLAS_HITL_TIMEOUT_SECONDS` (0) ·
-`ATLAS_BEDROCK_REASONING_MODEL` / `ATLAS_BEDROCK_PHRASING_MODEL` (model overrides).
+`ATLAS_BEDROCK_REASONING_MODEL` / `ATLAS_BEDROCK_PHRASING_MODEL` (model overrides) ·
+**`ATLAS_DATABASE_URL`** (unset = in-memory; set = Postgres persistence + the authenticated
+network — see below; `docker compose up` defaults it to the bundled `postgres` service) ·
+`ATLAS_API_KEY` (opt-in operator edge auth) · `ATLAS_NETWORK_SESSION_TTL_SECONDS` (43200).
+
+## Persistence + the authenticated network (opt-in, `ATLAS_DATABASE_URL`)
+
+Off by default → fully in-memory (every in-memory test unchanged). When set, two layers switch on:
+
+- **`atlas/db`** — async SQLAlchemy (asyncpg/Postgres, aiosqlite in tests), portable JSON
+  columns, `metadata.create_all` (no Alembic). The org is mirrored on first boot (`seed_org`,
+  idempotent). **Write-through persistence** at the point of record (`DbWriter`): the Router
+  persists tasks + messages, HitlQueue the approvals, the orchestrator the share-decisions,
+  the push service its configs — a sync, non-blocking `record()` onto an unbounded ordered
+  queue drained by one async worker. The broker tap is reserved for fire-and-forget telemetry
+  (trace spans) only, since the broker drops oldest under backpressure.
+- **`atlas/network`** — agents **join the network** by proving an Ed25519 key (challenge →
+  signature → verify) and receive a scoped, expiring **JWT** backed by a revocable DB session;
+  thereafter they communicate without re-authenticating, while the Policy Engine still
+  authorises every message. Agent ids are seed-deterministic `SEP-<16 digits>`.
+  **Membership gating:** the orchestrator routes/groups/sources only among joined members and
+  the Router `send_message` is the backstop (operator edge exempt). **Consequence:** with the
+  DB on, **the network starts empty → prompts are rejected and cron is idle until agents join**
+  (UI: **Network → Join all**). This is by design (selective membership); to demo the old
+  always-live behavior, leave `ATLAS_DATABASE_URL` unset.
 
 ## Repo layout
 
@@ -212,6 +242,8 @@ deterministic text), so they run without a key — it is never used by the app.
 atlas/   a2a/ (protocol)  org/ (company+generator)  bus/ (router/discovery)
          policy/ (deterministic compliance engine)  conversation/ (orchestrator/threads/groups)
          hitl/  cron/  llm/  metrics/  events/ (SSE schema = the FE contract)
+         push/ (A2A webhook delivery)  db/ (opt-in Postgres persistence + write-through)
+         network/ (Ed25519 join-the-network auth + scoped JWT sessions)
          api/  store/  main.py  runtime.py  config.py
 web/     React + Vite + TS mission-control UI (force-graph, Zustand, SSE)
 tests/   pytest suite     Dockerfile · docker-compose.yml

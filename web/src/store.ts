@@ -7,14 +7,17 @@ import type {
   FeedItem,
   GateRejectedPayload,
   GroupFormedPayload,
+  HistoryConversation,
   HitlItem,
   LlmStatusPayload,
   MessageSentPayload,
   OrgView,
+  PushDeliveredPayload,
   ThreadCreatedPayload,
   TraceSpanPayload,
 } from "./types";
 import { KNOWN_EVENTS } from "./types";
+import { api } from "./api";
 
 export interface LiveLink {
   id: string;
@@ -28,17 +31,29 @@ export interface LiveLink {
 
 export interface ContextMeta {
   contextId: string;
+  taskId?: string;
   prompt?: string;
   routedTo?: string;
   routedToName?: string;
   state?: string;
   kind: "user" | "cron";
   ts: number;
+  pending?: boolean; // optimistic: dispatched locally, not yet routed by the backend
 }
 
-export type Decision = ContextSharePayload & { kind: string; ts: number };
+let pendingSeq = 0; // monotonic temp-id counter for optimistic conversations
 
-type View = "convo" | "history" | "network" | "roster" | "projects";
+export type Decision = ContextSharePayload & { kind: string; ts: number };
+export type PushDelivery = PushDeliveredPayload & { ts: number };
+
+export interface NetworkState {
+  enabled: boolean; // DB-backed authenticated network is on (the /api/network probe succeeded)
+  loaded: boolean; // the initial probe has completed
+  online: Record<string, true>; // agent_ids currently joined to the network
+  busy: Record<string, true>; // a join/disconnect is in flight for this agent
+}
+
+type View = "convo" | "history" | "members" | "comms" | "roster" | "projects";
 
 interface State {
   conn: "connecting" | "live" | "down";
@@ -49,10 +64,12 @@ interface State {
   messagesByCtx: Record<string, ChatMessage[]>;
   decisionsByCtx: Record<string, Decision[]>;
   tracesByCtx: Record<string, TraceSpanPayload[]>;
+  pushByCtx: Record<string, PushDelivery[]>;
   threads: Record<string, ThreadCreatedPayload>;
   groups: Record<string, GroupFormedPayload>;
   contexts: Record<string, ContextMeta>;
   contextOrder: string[]; // most-recent-activity first — drives the conversation timeline
+  archived: Record<string, true>; // moved to History-only (hidden from the live timeline)
   hitl: HitlItem[];
   hitlResolvedCount: number;
   metricsTotals: Record<string, any>;
@@ -61,6 +78,7 @@ interface State {
   feed: FeedItem[];
   gate: GateRejectedPayload | null;
   llm: LlmStatusPayload | null;
+  network: NetworkState;
   // ui
   view: View;
   deptFilter: string | null;
@@ -76,6 +94,18 @@ interface State {
   selectContext: (c: string | null) => void;
   selectAgent: (a: string | null) => void;
   removeHitl: (id: string) => void;
+  dismissGate: () => void;
+  dispatch: (prompt: string) => Promise<void>;
+  pendingPrompt: (prompt: string) => string;
+  cancelPending: (tempId: string) => void;
+  loadHistory: () => Promise<void>;
+  seedHistory: (conversations: HistoryConversation[]) => void;
+  clearHistory: () => Promise<void>;
+  loadNetwork: () => Promise<void>;
+  joinAgent: (id: string) => Promise<void>;
+  disconnectAgent: (id: string) => Promise<void>;
+  joinAll: (ids: string[]) => Promise<void>;
+  disconnectAll: () => Promise<void>;
 }
 
 const FEED_CAP = 220;
@@ -92,10 +122,12 @@ export const useStore = create<State>((set, get) => ({
   messagesByCtx: {},
   decisionsByCtx: {},
   tracesByCtx: {},
+  pushByCtx: {},
   threads: {},
   groups: {},
   contexts: {},
   contextOrder: [],
+  archived: {},
   hitl: [],
   hitlResolvedCount: 0,
   metricsTotals: {},
@@ -104,6 +136,7 @@ export const useStore = create<State>((set, get) => ({
   feed: [],
   gate: null,
   llm: null,
+  network: { enabled: false, loaded: false, online: {}, busy: {} },
   view: "convo",
   deptFilter: null,
   selectedContext: null,
@@ -115,6 +148,161 @@ export const useStore = create<State>((set, get) => ({
   selectContext: (c) => set({ selectedContext: c }),
   selectAgent: (a) => set({ selectedAgent: a }),
   removeHitl: (id) => set((s) => ({ hitl: s.hitl.filter((h) => h.request_id !== id) })),
+  dismissGate: () => set({ gate: null }),
+
+  // Optimistic dispatch: show the conversation the instant the operator hits send — the prompt as
+  // a right-aligned "You" bubble + a routing… header — before the (slow) backend route returns.
+  // The real context_id arrives via the `prompt.accepted` SSE event, which reconciles this temp one.
+  pendingPrompt: (prompt) => {
+    const s = get();
+    const tempId = `pending-${++pendingSeq}-${now()}`;
+    // a fresh dispatch retires any finished conversation to History-only (keeps the deck clean)
+    const archived = { ...s.archived };
+    for (const cid of s.contextOrder) {
+      const st = s.contexts[cid]?.state;
+      if (st === "completed" || st === "failed") archived[cid] = true;
+    }
+    const ctx: ContextMeta = { contextId: tempId, prompt, state: "routing", kind: "user", ts: now(), pending: true };
+    const opMsg: ChatMessage = {
+      id: `op-${tempId}`, contextId: tempId, sender: "operator", recipients: [], mode: "individual",
+      role: "user", text: prompt, ts: now(),
+    };
+    set({
+      archived,
+      contexts: { ...s.contexts, [tempId]: ctx },
+      messagesByCtx: { ...s.messagesByCtx, [tempId]: [opMsg] },
+      contextOrder: [tempId, ...s.contextOrder].slice(0, CTX_CAP),
+      gate: null,
+    });
+    return tempId;
+  },
+  cancelPending: (tempId) => {
+    const s = get();
+    const contexts = { ...s.contexts };
+    delete contexts[tempId];
+    const messagesByCtx = { ...s.messagesByCtx };
+    delete messagesByCtx[tempId];
+    set({ contexts, messagesByCtx, contextOrder: s.contextOrder.filter((x) => x !== tempId) });
+  },
+  dispatch: async (prompt) => {
+    const p = prompt.trim();
+    if (!p) return;
+    const tempId = get().pendingPrompt(p); // render the conversation instantly
+    try {
+      const res = (await api.prompt(p)) as { rejected?: boolean } | undefined;
+      if (res?.rejected) get().cancelPending(tempId); // out-of-scope → drop the optimistic card; gate banner shows
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("[atlas] dispatch failed", e);
+      get().cancelPending(tempId);
+    }
+  },
+
+  loadHistory: async () => {
+    try {
+      const data = await api.history();
+      get().seedHistory(data.conversations || []);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("[atlas] history load failed", e);
+    }
+  },
+
+  // Rebuild the timeline + history from the persisted record (merge-safe: never clobbers
+  // anything the live stream already produced; dedups by id; ts already in ms from the API).
+  seedHistory: (conversations) => {
+    const s = get();
+    const contexts = { ...s.contexts };
+    const messagesByCtx = { ...s.messagesByCtx };
+    const decisionsByCtx = { ...s.decisionsByCtx };
+    const archived = { ...s.archived };
+    let order = [...s.contextOrder];
+    for (const c of conversations) {
+      const cid = c.context_id;
+      // a replayed conversation is history — keep it out of the live deck (still shows in History)
+      if (c.state === "completed" || c.state === "failed") archived[cid] = true;
+      if (!contexts[cid]) {
+        contexts[cid] = {
+          contextId: cid, taskId: c.task_id ?? undefined, prompt: c.prompt,
+          routedTo: c.routed_to, routedToName: c.routed_to_name, state: c.state, kind: c.kind, ts: c.ts,
+        };
+      }
+      const existing = messagesByCtx[cid] || [];
+      const seen = new Set(existing.map((m) => m.id));
+      const seeded: ChatMessage[] = (c.messages || [])
+        .filter((m) => !seen.has(m.message_id))
+        .map((m) => ({
+          id: m.message_id, contextId: cid, sender: m.sender, recipients: m.recipients, mode: m.mode,
+          role: m.role, text: m.text, thinking: m.thinking ?? undefined,
+          intent: (m.intent ?? undefined) as ChatMessage["intent"],
+          threadId: m.thread_id ?? undefined, groupId: m.group_id ?? undefined, ts: m.ts,
+        }));
+      messagesByCtx[cid] = [...seeded, ...existing].sort((a, b) => a.ts - b.ts).slice(-160);
+
+      const exD = decisionsByCtx[cid] || [];
+      const keyOf = (d: any) => `${d.item_id}:${d.kind}:${d.sender}:${d.recipient}`;
+      const seenD = new Set(exD.map(keyOf));
+      const seededD = (c.decisions || []).filter((d) => !seenD.has(keyOf(d))) as unknown as Decision[];
+      decisionsByCtx[cid] = [...seededD, ...exD].sort((a, b) => a.ts - b.ts).slice(-80);
+
+      if (!order.includes(cid)) order.push(cid);
+    }
+    order = order.sort((a, b) => (contexts[b]?.ts || 0) - (contexts[a]?.ts || 0)).slice(0, CTX_CAP);
+    set({ contexts, messagesByCtx, decisionsByCtx, archived, contextOrder: order });
+  },
+
+  clearHistory: async () => {
+    try {
+      await api.clearHistory();
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("[atlas] clear history failed", e);
+    }
+    // wipe the conversation/history view (org, network membership + lifetime metrics stay)
+    set({
+      contexts: {}, contextOrder: [], archived: {}, messagesByCtx: {}, decisionsByCtx: {}, tracesByCtx: {},
+      pushByCtx: {}, threads: {}, groups: {}, hitl: [], metricsByCtx: {}, feed: [],
+      gate: null, selectedContext: null,
+    });
+  },
+
+  loadNetwork: async () => {
+    try {
+      const r = await api.network();
+      const online: Record<string, true> = {};
+      for (const m of r.members) online[m.agent_id] = true;
+      set((s) => ({ network: { ...s.network, enabled: true, loaded: true, online } }));
+    } catch {
+      // 503 ⇒ no DB / network auth off; the panel shows an informative "off" state
+      set((s) => ({ network: { ...s.network, enabled: false, loaded: true } }));
+    }
+  },
+  joinAgent: async (id) => {
+    set((s) => ({ network: { ...s.network, busy: { ...s.network.busy, [id]: true } } }));
+    try {
+      await api.networkJoin(id);
+      set((s) => ({ network: { ...s.network, online: { ...s.network.online, [id]: true } } }));
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("[atlas] join failed", id, e);
+    } finally {
+      set((s) => { const busy = { ...s.network.busy }; delete busy[id]; return { network: { ...s.network, busy } }; });
+    }
+  },
+  disconnectAgent: async (id) => {
+    set((s) => ({ network: { ...s.network, busy: { ...s.network.busy, [id]: true } } }));
+    try {
+      await api.networkDisconnect(id);
+      set((s) => { const online = { ...s.network.online }; delete online[id]; return { network: { ...s.network, online } }; });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("[atlas] disconnect failed", id, e);
+    } finally {
+      set((s) => { const busy = { ...s.network.busy }; delete busy[id]; return { network: { ...s.network, busy } }; });
+    }
+  },
+  joinAll: async (ids) => { await runBatched(ids, (id) => get().joinAgent(id)); },
+  disconnectAll: async () => { await runBatched(Object.keys(get().network.online), (id) => get().disconnectAgent(id)); },
 
   setOrg: (o) => {
     const agents: Record<string, AgentNode> = {};
@@ -181,32 +369,49 @@ export const useStore = create<State>((set, get) => ({
 
       case "prompt.accepted": {
         const isCron = String(d.context_id).startsWith("cron-");
-        set({
-          contexts: {
-            ...get().contexts,
-            [d.context_id]: {
-              contextId: d.context_id,
-              prompt: d.prompt,
-              routedTo: d.routed_to,
-              routedToName: d.routed_to_name,
-              state: "working",
-              kind: isCron ? "cron" : "user",
-              ts: now(),
-            },
-          },
-          gate: null,
-        });
-        touch(d.context_id);
+        const s2 = get();
+        const contexts = { ...s2.contexts };
+        const messagesByCtx = { ...s2.messagesByCtx };
+        let order = [...s2.contextOrder];
+        // reconcile the optimistic pending conversation (same prompt) → the real context_id,
+        // carrying its operator "You" bubble across so the dispatch doesn't flicker.
+        const pendingId = Object.keys(contexts).find((id) => contexts[id].pending && contexts[id].prompt === d.prompt);
+        if (pendingId && pendingId !== d.context_id) {
+          const opMsgs = (messagesByCtx[pendingId] || []).map((m) => ({ ...m, contextId: d.context_id, recipients: [d.routed_to] }));
+          delete messagesByCtx[pendingId];
+          messagesByCtx[d.context_id] = [...opMsgs, ...(messagesByCtx[d.context_id] || [])];
+          delete contexts[pendingId];
+          order = order.filter((x) => x !== pendingId);
+        }
+        contexts[d.context_id] = {
+          contextId: d.context_id, taskId: d.task_id, prompt: d.prompt, routedTo: d.routed_to,
+          routedToName: d.routed_to_name, state: "working", kind: isCron ? "cron" : "user", ts: now(), pending: false,
+        };
+        order = [d.context_id, ...order.filter((x) => x !== d.context_id)].slice(0, CTX_CAP);
+        set({ contexts, messagesByCtx, contextOrder: order, gate: null });
         // only the operator "routes" interactive prompts; cron goals are self-initiated
         if (!isCron) upsertLink("operator", d.routed_to, { intent: "task-context", mode: "individual" });
         pushFeed(isCron ? `Goal launched · ${d.routed_to_name}` : `Prompt routed to ${d.routed_to_name}`, isCron ? "info" : "accent");
         break;
       }
 
-      case "gate.rejected":
-        set({ gate: d as GateRejectedPayload });
+      case "gate.rejected": {
+        const gp = d as GateRejectedPayload;
+        const st = get();
+        // drop the optimistic card for this rejected prompt (so it doesn't linger till the HTTP reply)
+        const pid = Object.keys(st.contexts).find((id) => st.contexts[id].pending && st.contexts[id].prompt === gp.prompt);
+        if (pid) {
+          const contexts = { ...st.contexts };
+          delete contexts[pid];
+          const messagesByCtx = { ...st.messagesByCtx };
+          delete messagesByCtx[pid];
+          set({ gate: gp, contexts, messagesByCtx, contextOrder: st.contextOrder.filter((x) => x !== pid) });
+        } else {
+          set({ gate: gp });
+        }
         pushFeed(`Gate rejected an out-of-scope prompt`, "danger");
         break;
+      }
 
       case "discovery.matched":
         if (d.level === 1 && d.chosen) {
@@ -226,7 +431,7 @@ export const useStore = create<State>((set, get) => ({
         set({
           contexts: {
             ...get().contexts,
-            [d.context_id]: { ...(ctx || { contextId: d.context_id, kind: "cron", ts: now() }), state: d.state },
+            [d.context_id]: { ...(ctx || { contextId: d.context_id, kind: "cron", ts: now(), taskId: d.task_id }), state: d.state },
           },
         });
         if (d.state === "input-required") pushFeed(`Task awaiting approval`, "hitl");
@@ -246,6 +451,7 @@ export const useStore = create<State>((set, get) => ({
 
       case "message.sent": {
         const m = d as MessageSentPayload;
+        if ((get().messagesByCtx[m.context_id] || []).some((x) => x.id === m.message_id)) break; // dedup vs seeded
         const msg: ChatMessage = {
           id: m.message_id,
           contextId: m.context_id,
@@ -323,6 +529,32 @@ export const useStore = create<State>((set, get) => ({
         break;
       }
 
+      case "push.delivered": {
+        const p = d as PushDeliveredPayload;
+        if (p.context_id) {
+          const list = [...(get().pushByCtx[p.context_id] || []), { ...p, ts: now() }].slice(-50);
+          set({ pushByCtx: { ...get().pushByCtx, [p.context_id]: list } });
+        }
+        if (!p.ok || p.final) pushFeed(`Webhook ${p.ok ? "delivered" : "failed"} · ${p.state}`, p.ok ? "ok" : "danger");
+        break;
+      }
+
+      case "network.joined": {
+        const net = get().network;
+        set({ network: { ...net, enabled: true, online: { ...net.online, [d.agent_id]: true } } });
+        pushFeed(`${d.name} joined the network`, "ok");
+        break;
+      }
+
+      case "network.left": {
+        const net = get().network;
+        const online = { ...net.online };
+        delete online[d.agent_id];
+        set({ network: { ...net, online } });
+        pushFeed(`${d.name} left the network`, "warn");
+        break;
+      }
+
       case "cron.tick":
         set({ cron: { ...get().cron, running: true, elapsed: d.elapsed, remaining: d.remaining, planned: d.planned } });
         break;
@@ -334,6 +566,13 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 }));
+
+// run an async op over many ids with bounded concurrency (don't fire 100 POSTs at once)
+async function runBatched<T>(ids: T[], op: (id: T) => Promise<void>, size = 12): Promise<void> {
+  for (let i = 0; i < ids.length; i += size) {
+    await Promise.all(ids.slice(i, i + size).map(op));
+  }
+}
 
 function shorten(s: string, n = 28): string {
   return s && s.length > n ? s.slice(0, n) + "…" : s;

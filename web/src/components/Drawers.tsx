@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Activity, Brain, Lock, Sparkles, Users, X, Zap } from "lucide-react";
 import { api } from "../api";
-import type { AgentCardView, ChatMessage, TraceSpanPayload } from "../types";
+import type { AgentCardView, ChatMessage, PushConfig, TraceSpanPayload } from "../types";
 import { LEVEL_LABEL, TRACE_KIND_META, deptColor } from "../theme";
 import { useStore } from "../store";
 import { IntentChip, ModeTag, OutcomeBadge, SensitivityShield, StatusDot } from "./ui";
@@ -91,7 +91,7 @@ export function ConversationDrawer() {
         </div>
       </div>
 
-      <Tabs tab={tab} set={setTab} tabs={[{ id: "thread", label: "Thread", n: messages.length }, { id: "trace", label: "Trace", n: spans.length }]} />
+      <Tabs tab={tab} set={setTab} tabs={[{ id: "thread", label: "Thread", n: messages.length }, { id: "trace", label: "Trace", n: spans.length }, { id: "push", label: "Push" }]} />
 
       {tab === "thread" && (
         <>
@@ -130,7 +130,109 @@ export function ConversationDrawer() {
           </div>
         </div>
       )}
+
+      {tab === "push" && <PushTab taskId={ctx?.taskId} contextId={cid} />}
     </Drawer>
+  );
+}
+
+function PushTab({ taskId, contextId }: { taskId?: string; contextId: string | null }) {
+  const [configs, setConfigs] = useState<PushConfig[]>([]);
+  const [url, setUrl] = useState("");
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const deliveries = useStore((s) => (contextId ? s.pushByCtx[contextId] : null)) ?? [];
+
+  const load = () => {
+    if (taskId) api.pushConfigs(taskId).then((r) => setConfigs(r.configs)).catch(console.error);
+  };
+  useEffect(load, [taskId]);
+
+  if (!taskId) return <div className="p-3.5 text-[11px] text-faint">No task yet for this conversation.</div>;
+
+  const add = async () => {
+    const u = url.trim();
+    if (!u) return;
+    setBusy(true);
+    try {
+      await api.pushAdd(taskId, { url: u, token: token.trim() || undefined });
+      setUrl("");
+      setToken("");
+      load();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const del = async (id: string) => {
+    try {
+      await api.pushDelete(taskId, id);
+      load();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  return (
+    <div className="p-3.5 flex flex-col gap-3">
+      <div className="text-[10px] text-faint leading-snug">
+        Register a webhook for this task — Atlas POSTs a status update to it on every task-state change (A2A push
+        notifications). Tip: paste a <span className="mono">https://webhook.site</span> URL to watch deliveries land.
+      </div>
+      <div className="inset rounded-md p-2 flex flex-col gap-1.5">
+        <input
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && add()}
+          placeholder="https://webhook.site/…"
+          className="bg-transparent outline-none text-ink text-[12px]"
+        />
+        <div className="flex items-center gap-1.5">
+          <input
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder="validation token (optional)"
+            className="bg-transparent outline-none text-muted text-[11px] flex-1 min-w-0"
+          />
+          <button
+            onClick={add}
+            disabled={busy || !url.trim()}
+            className="text-[10px] font-bold tracking-wide px-2.5 py-1 rounded shrink-0 text-white disabled:opacity-40"
+            style={{ background: "var(--accent)" }}
+          >
+            REGISTER
+          </button>
+        </div>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <div className="eyebrow">Registered webhooks ({configs.length})</div>
+        {configs.map((c) => (
+          <div key={c.id} className="flex items-center justify-between gap-2 inset rounded-md px-2 py-1.5">
+            <div className="min-w-0">
+              <div className="text-[11px] text-ink truncate">{c.url}</div>
+              <div className="mono text-[8.5px] text-faint">{c.id}{c.token ? " · token set" : ""}</div>
+            </div>
+            <button onClick={() => del(c.id)} title="Delete" className="text-faint hover:text-ink shrink-0"><X size={13} /></button>
+          </div>
+        ))}
+        {configs.length === 0 && <div className="text-[11px] text-faint text-center py-3">No webhooks registered yet.</div>}
+      </div>
+      {deliveries.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <div className="eyebrow">Deliveries ({deliveries.length})</div>
+          {[...deliveries].reverse().map((dlv, i) => (
+            <div key={i} className="flex items-center justify-between gap-2 text-[10.5px]">
+              <span className="flex items-center gap-1.5 min-w-0">
+                <span className="mono text-[8px] uppercase px-1 py-0.5 rounded shrink-0" style={{ color: dlv.ok ? "var(--ok)" : "var(--coral)", background: dlv.ok ? "rgba(31,143,90,0.10)" : "rgba(209,42,58,0.10)" }}>{dlv.ok ? "sent" : "fail"}</span>
+                <span className="text-ink truncate">{dlv.state}{dlv.final ? " · final" : ""}</span>
+              </span>
+              <span className="mono text-[8.5px] text-faint shrink-0">{dlv.status_code ?? "—"}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -234,6 +336,7 @@ export function AgentCardDrawer() {
               <Row k="Teams" v={node?.teams.join(", ") || "—"} />
               <Row k="Projects" v={node?.projects.join(", ") || "—"} />
             </Section>
+            {card?.user && <TaskAsComposer user={card.user} accent={color} />}
             <Section label={`Skills (${card?.card?.skills?.length ?? 0})`}>
               <div className="flex flex-col gap-1.5">
                 {card?.card?.skills?.map((s: any) => (
@@ -297,6 +400,46 @@ export function AgentCardDrawer() {
         )}
       </div>
     </Drawer>
+  );
+}
+
+function TaskAsComposer({ user, accent }: { user: NonNullable<AgentCardView["user"]>; accent: string }) {
+  const [text, setText] = useState("");
+  const submit = async () => {
+    const p = text.trim();
+    if (!p) return;
+    setText("");
+    try {
+      await api.prompt(p, { user_id: user.user_id });
+      useStore.getState().setView("convo"); // reveal the conversation timeline…
+      useStore.getState().selectAgent(null); // …and close the drawer to watch it unfold
+    } catch (e) {
+      console.error(e);
+    }
+  };
+  return (
+    <Section label={`Task as ${user.name}`}>
+      <div className="text-[10px] text-faint leading-snug mb-1.5">
+        Dispatch a prompt attributed to {user.name} — the human who operates this agent. The org routes it as usual; the prompt is credited to this user.
+      </div>
+      <div className="flex items-center gap-1.5 inset rounded-md px-2 h-9" style={{ boxShadow: `inset 0 0 0 1px ${accent}33` }}>
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+          placeholder="Prompt to dispatch as this user…"
+          className="bg-transparent outline-none text-ink text-[12px] flex-1 min-w-0"
+        />
+        <button
+          onClick={submit}
+          disabled={!text.trim()}
+          className="text-[10px] font-bold tracking-wide px-2.5 py-1 rounded shrink-0 text-white transition-opacity disabled:opacity-40"
+          style={{ background: accent }}
+        >
+          TASK
+        </button>
+      </div>
+    </Section>
   );
 }
 

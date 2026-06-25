@@ -16,7 +16,7 @@ produces the same result — so its decisions are predictable and auditable. It 
 which a second language model played the reviewer.
 
 **One shortcut, for cost and speed (the pre-gate).** Where the rules would settle the matter no matter what the
-owner thinks — every refusal, and every secret (which always needs a human's approval) — the engine runs *first*
+owner thinks — every refusal, and everything routed to a human for approval (secrets, and out-of-scope restricted data) — the engine runs *first*
 and decides outright, and the model is not asked at all. Asking it would change nothing (the owner cannot loosen
 what the rules require) while costing a model call and a few seconds. The model is consulted only where its
 judgement can still move the result: ordinary share-or-redact situations. The shortcut never makes a result more
@@ -71,7 +71,7 @@ Each rule names the real-world standard it is based on.
 |---|---|---|---|
 | Clearance gate | Deny | the requester's clearance is below the item's required level | Bell-LaPadula "no read up"; NIST 800-53 AC-3 |
 | Need-to-know | Redact | the requester is out of scope and the item is confidential or restricted (and it is not an incident) | PCI-DSS Req. 7; NIST 800-53 AC-6 |
-| Least-privilege deny | Deny | the requester is out of scope and the item is restricted or higher (and they are not an incident responder) | PCI-DSS Req. 7 deny-all default; AWS IAM deny-by-default |
+| Least-privilege (escalate) | Escalate | the requester is out of scope and the item is restricted or higher (and they are not an incident responder) | PCI-DSS Req. 7 / AWS IAM — not auto-shared; a human decides the exception |
 | Payment secret | Deny, or Escalate | the item is a live payment/API secret: Deny when the requester has no billing or incident reason, otherwise Escalate for human approval | PCI-DSS Req. 3 and 7 |
 | Personal-data purpose | Deny | the item is personal data and the stated reason is social or non-business (no lawful basis) | GDPR Art. 6 and Art. 5(1)(b) |
 | Personal-data minimisation | Redact | the item is personal data, the requester is out of scope, and the purpose is legitimate | GDPR Art. 5(1)(c); HIPAA minimum-necessary |
@@ -85,8 +85,8 @@ Because the strictest rule wins, the practical effect by sensitivity tier is:
 
 - Public and internal data is shared freely.
 - Confidential data requested by someone out of scope is reduced to a safe summary (redacted).
-- Restricted data requested by someone out of scope is denied, unless they are an incident responder.
-- Secret data is escalated to a human if the requester is plausibly entitled, and otherwise denied.
+- Restricted data requested by someone out of scope is escalated to a human to decide the exception (an incident responder may receive it directly).
+- Secret data is escalated to a human as well — denied only if the requester is under-cleared, or it is a live payment credential with no billing/incident reason.
 
 ## Who can access what
 
@@ -94,8 +94,8 @@ Because the strictest rule wins, the practical effect by sensitivity tier is:
 |---|---|---|
 | Public / internal | anyone / all employees | shared |
 | Confidential | people with a need to know in the owning team or project | a safe summary (redact) |
-| Restricted | explicit need-to-know; senior staff and the owning function | denied (unless incident response) |
-| Secret | a strict, audited, named list only | denied, or escalated to a human if plausibly entitled |
+| Restricted | explicit need-to-know; senior staff and the owning function | escalated to a human (an incident responder may receive it) |
+| Secret | a strict, audited, named list only | escalated to a human — denied only if under-cleared or a payment credential with no nexus |
 
 ## Sources
 

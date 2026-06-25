@@ -171,7 +171,7 @@ class Intent(BaseModel):
 
 class ShareDecision(BaseModel):
     """The need-to-know ruling on a single share request (the owner agent's LLM
-    decision, possibly tightened by the Policy Officer)."""
+    decision, possibly tightened by the deterministic Policy Engine)."""
 
     outcome: ShareOutcome
     reason: str

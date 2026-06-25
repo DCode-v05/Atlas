@@ -64,6 +64,39 @@ DEPT_SPECS: tuple[DeptSpec, ...] = (
 CEO_TITLE = "Chief Executive Officer"
 ORG_NAME = "Atlas"
 
+# ─── Security schemes declared on every Agent Card (A2A securitySchemes) ───────
+# Spec-shaped OpenAPI/A2A scheme objects. API-key (and the equivalent HTTP bearer)
+# are ENFORCED at the edge when ATLAS_API_KEY is set; OAuth2 / OIDC / mTLS are
+# DECLARED for external A2A clients but not enforced in-process (there is no IdP
+# or TLS-terminating transport here — the agent bus is in-process).
+SECURITY_SCHEMES: dict[str, dict] = {
+    "apiKey": {
+        "type": "apiKey", "in": "header", "name": "X-API-Key",
+        "description": "Operator/API key gating the Atlas edge (enforced when ATLAS_API_KEY is set).",
+    },
+    "bearer": {
+        "type": "http", "scheme": "bearer",
+        "description": "The same edge key presented as 'Authorization: Bearer <key>'.",
+    },
+    "oauth2": {
+        "type": "oauth2",
+        "flows": {"clientCredentials": {"tokenUrl": "https://atlas.dev/oauth/token", "scopes": {}}},
+        "description": "Declared for external A2A clients; not enforced in-process (no IdP).",
+    },
+    "openIdConnect": {
+        "type": "openIdConnect",
+        "openIdConnectUrl": "https://atlas.dev/.well-known/openid-configuration",
+        "description": "Declared for external A2A clients; not enforced in-process.",
+    },
+    "mutualTLS": {
+        "type": "mutualTLS",
+        "description": "Declared for external A2A clients; mTLS terminates at a real transport Atlas does not expose.",
+    },
+}
+
+#: Schemes a caller must satisfy (A2A securityRequirements). The API key is enforced.
+SECURITY_REQUIREMENTS: tuple[dict, ...] = ({"apiKey": []},)
+
 # ─── Per-agent goals (a standing responsibility, "like humans have") ───────────
 # Keyed by department, with a phrasing per seniority bucket: head / lead / ic.
 # The CEO is handled separately. These ride on each agent's OrgProfile.goal.

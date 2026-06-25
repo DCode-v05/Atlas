@@ -19,7 +19,9 @@ from atlas.events.schema import (
     LlmStatusPayload,
     MessageSentPayload,
     MetricsUpdatedPayload,
+    NetworkMemberPayload,
     PromptAcceptedPayload,
+    PushDeliveredPayload,
     TaskStatePayload,
     ThreadCreatedPayload,
     TraceSpanPayload,
@@ -48,4 +50,6 @@ __all__ = [
     "CronStatePayload",
     "LlmStatusPayload",
     "TraceSpanPayload",
+    "PushDeliveredPayload",
+    "NetworkMemberPayload",
 ]

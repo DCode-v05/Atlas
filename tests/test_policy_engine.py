@@ -84,17 +84,18 @@ def test_in_scope_confidential_concurs_with_share():
     assert d.outcome == SHARE and d.rule_id == "LLM-OWNER"  # engine concurs, owner's decision stands
 
 
-def test_least_privilege_denies_out_of_scope_restricted():
+def test_least_privilege_escalates_out_of_scope_restricted():
     it = item(sens=Sensitivity.RESTRICTED, scope=Scope.TEAM, ref="devops-team-1")
     d = review(SHARE, prof(teams=["engineering-team-1"]), it)  # out of scope
-    assert d.outcome == DENY
+    # soft floor: not a flat deny — routed to a human to decide the exception
+    assert d.outcome == ESCALATE and "LEAST-PRIV-ESCALATE" in d.rule_id
 
 
-def test_incident_carveout_suppresses_the_deny():
+def test_incident_carveout_suppresses_the_tightening():
     it = item(sens=Sensitivity.RESTRICTED, scope=Scope.TEAM, ref="devops-team-1")
     r = prof(dept=Department.DEVOPS, teams=["engineering-team-1"])  # responder, out of scope
     d = review(SHARE, r, it, intent(purpose=PurposeTag.INCIDENT))
-    assert d.outcome == SHARE  # incident carve-out suppresses least-priv DENY; nothing else tightens
+    assert d.outcome == SHARE  # incident carve-out suppresses need-to-know + least-priv; nothing else tightens
 
 
 def test_pci_secret_denies_unentitled():
@@ -165,4 +166,4 @@ def test_explain_lists_every_firing_rule():
               tags=("billing", "secrets", "payments"), summary="[redacted payment credential]")
     fired = ENGINE.explain(_dec(SHARE, it), prof(projects=["mobile"]), OWNER, it, intent())
     ids = {rid for rid, _, _ in fired}
-    assert "POLICY/LEAST-PRIV-DENY" in ids and "POLICY/PCI-SECRET" in ids  # both fire; max() picks DENY
+    assert "POLICY/LEAST-PRIV-ESCALATE" in ids and "POLICY/PCI-SECRET" in ids  # both fire; max() still picks DENY (PCI keeps the payment secret hard)

@@ -49,7 +49,8 @@ the metrics collector. Ratings below are grounded in what the **code actually ex
 - `atlas/bus/router.py` — the single message chokepoint; org-scope gate; metrics emission.
 - `atlas/org/generator.py` — the 100-agent hierarchy, teams, projects, clearance, goals.
 - `atlas/org/ext_models.py` — `Intent`, `Sensitivity`, `Scope`, `ShareOutcome`, `Metrics`.
-- `atlas/llm/base.py`, `atlas/llm/bedrock_provider.py` — the LLM seam (Mistral on Amazon Bedrock), including `decide_share` and the Policy Officer's `review_share`.
+- `atlas/llm/base.py`, `atlas/llm/bedrock_provider.py` — the LLM seam (Mistral on Amazon Bedrock), including the owner agent's `decide_share`.
+- `atlas/policy/engine.py`, `atlas/policy/rules.py` — the deterministic compliance Policy Engine (tighten-only ABAC review of the owner's decision).
 - `atlas/metrics/collector.py` — communication-efficiency counters.
 
 ---
@@ -225,21 +226,27 @@ the share is handed to a **human operator** via a real HITL queue; the task ente
 (`_handle_hitl` `:453-500`; `HitlRequest` in `ext_models.py:215-233`). A genuine
 human-in-the-loop on sensitive shares is a strong, realistic touch that most agent demos lack.
 
-**Two pairs of eyes — the independent "Policy Officer" is wired in.** The Security
-department head doubles as an independent **Policy Officer** that gives a compliance
-**second opinion** on every owner SHARE/REDACT. `_decide_share` builds the owner's decision
-and passes it to `_policy_review`, which calls the Security head's own LLM
-(`llm.review_share`, declared in `llm/base.py` and implemented against Bedrock in
-`bedrock_provider.py`); the officer may **concur or tighten** (redact / escalate / deny) but
-never loosen. An override re-stamps the `ShareDecision` with `rule_id="POLICY-OFFICER"`, and
-both concur and override emit a `policy_review` trace span on the officer; `policy_reviews` /
-`policy_overrides` are metered (`metrics/collector.py`, surfaced as the UI "Compliance" tile),
-and the tests `test_policy_officer_tightens_the_owners_share` / `test_policy_officer_cannot_loosen`
-prove the tighten-only behaviour. This delivers the "two pairs of eyes" / segregation-of-duties
-property real security functions rely on, and it stays fully LLM-driven (two independent agents
-— owner + officer). (When the LLM is unreachable the offline path is "escalate to the human,"
-not a deterministic matrix — `_decide_share` in `orchestrator.py`; the former `atlas/policy/`
-rule matrix has been removed from the codebase.)
+**Two pairs of eyes — a deterministic Policy Engine reviews every share.** The owner's LLM
+decision passes through the **`atlas/policy` Policy Engine**, a tighten-only ABAC compliance
+review that may **concur or tighten** (redact / escalate / deny) but never loosen. `_decide_share`
+builds the owner's decision and passes it to `_policy_review`, which calls `PolicyEngine.review`:
+~11 codified rules (clearance / need-to-know / least-privilege / PCI / GDPR-PII / HR-comp /
+SOX-MNPI / cross-department / secret four-eyes / officer self-review — each citing a named
+framework) folded **most-restrictive-wins** over `SHARE < REDACT < ESCALATE < DENY`, seeded with
+the owner's decision. A tighten re-stamps the `ShareDecision` with `rule_id="POLICY/<rule>"`, and
+every review emits a deterministic (`live=False`) `policy_review` trace span attributed to the
+Security head (the compliance authority); `policy_reviews` / `policy_overrides` are metered
+(`metrics/collector.py`, surfaced as the UI "Compliance" tile). A **cost/latency pre-gate**
+computes the floor *first* and, when it is already DENY or ESCALATE (every denial, and every
+secret via four-eyes), decides outright and **skips the owner's LLM** (metered `policy_pregates`).
+The tests in `tests/test_policy_engine.py` (rule pins + `test_tighten_only_never_loosens`) and
+`test_policy_engine_tightens_an_over_share` / `test_policy_pregate_short_circuits_a_secret` prove
+the tighten-only and pre-gate behaviour. This delivers the "two pairs of eyes" /
+segregation-of-duties property real security functions rely on — the owner's *judgement* stays
+the model's, but the compliance *floor* is deterministic and auditable. (This replaced an earlier
+LLM "Policy Officer" agent that gave the second opinion via its own model call. When the owner
+LLM is unreachable the offline path is "escalate to the human," not a code decision —
+`_decide_share` in `orchestrator.py`.)
 
 **Gap:** escalation goes to a **single global `operator`**, not *up the reporting chain* to the
 Accountable manager/dept-head the way RACI prescribes — Atlas models "escalate to a human" but
@@ -363,9 +370,10 @@ scope choice, but it is a realism gap worth naming.
   *owner* decides on its own data, redaction returns a safe summary, and sensitive shares hit a
   real human-in-the-loop queue. This is closer to how confidentiality actually works in
   companies than virtually any agent demo.
-- **An independent Policy Officer gives a compliance second opinion** — the Security head
-  reviews every share and can tighten (never loosen) it, a "two pairs of eyes" /
-  segregation-of-duties control, fully LLM-driven and traced.
+- **A deterministic Policy Engine gives a compliance second opinion** — a tighten-only ABAC
+  review (need-to-know / least-privilege / PCI / GDPR / SOX / four-eyes rules, attributed to the
+  Security head) reviews every share and can tighten (never loosen) it, a "two pairs of eyes" /
+  segregation-of-duties control, deterministic and traced.
 - **Intent travels with every request** — a motivation + purpose tag + scope on each ask,
   exactly the "lead with context, say what you want" discipline of good async writing.
 - **Routing is real and directory-wide**, and **efficiency is instrumented** at a single
@@ -391,12 +399,12 @@ scope choice, but it is a realism gap worth naming.
 
 ### Concrete recommendations
 
-1. **(Done) The Policy Officer is now wired.** `_decide_share` calls `_policy_review`, routing
-   the second opinion to the Security head (`snapshot.head_of(Department.SECURITY)`), recording
-   `policy_reviews` / `policy_overrides` and emitting a `policy_review` trace span (UI
-   "Compliance" tile). Natural next steps: let the officer *speak up* in-conversation on an
-   override (a visible message, not just a trace span), and let it escalate contested shares to
-   HITL rather than only tightening.
+1. **(Done) A deterministic Policy Engine reviews every share.** `_decide_share` calls
+   `_policy_review` → `PolicyEngine.review` (tighten-only ABAC, attributed to the Security head
+   `snapshot.head_of(Department.SECURITY)`), recording `policy_reviews` / `policy_overrides` /
+   `policy_pregates` and emitting a `policy_review` trace span (UI "Compliance" tile). Natural
+   next steps: let the engine *speak up* in-conversation on an override (a visible message, not
+   just a trace span), and let it escalate contested shares to HITL rather than only tightening.
 2. **Escalate up the chain, not to a global operator.** Resolve the HITL approver as the
    requester's (or owner's) `reports_to` / dept head before falling back to the operator —
    a small change in `_handle_hitl` that makes escalation match RACI.
@@ -419,10 +427,10 @@ scope choice, but it is a realism gap worth naming.
 ---
 
 *Method note:* ratings reflect the executed code paths in `atlas/conversation/orchestrator.py`
-and its collaborators. The Policy Officer compliance review was wired into `_decide_share`
-during the same work session in which this evaluation was produced; §4.5 and the score reflect
-the wired behaviour (an earlier draft of this evaluation had caught it as dormant code, which
-prompted the fix).
+and its collaborators. The compliance review described in §4.5 has since been reimplemented as the
+**deterministic `atlas/policy` Policy Engine** (replacing an earlier LLM "Policy Officer" agent
+that gave the second opinion via its own model call); §4.5 and the score reflect that current,
+deterministic behaviour.
 
 [1]: https://handbook.gitlab.com/handbook/company/culture/all-remote/asynchronous/
 [2]: https://handbook.gitlab.com/handbook/engineering/engineering-comms/

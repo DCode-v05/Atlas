@@ -1,6 +1,27 @@
-import { Bot, CheckCircle2, Sparkles, Users } from "lucide-react";
+import { Bot, CheckCircle2, Sparkles, Trash2, Users } from "lucide-react";
 import { useStore } from "../store";
 import { deptColor } from "../theme";
+
+function ClearHistoryButton() {
+  const clearHistory = useStore((s) => s.clearHistory);
+  const hasAny = useStore((s) => s.contextOrder.length > 0);
+  if (!hasAny) return null;
+  return (
+    <button
+      onClick={() => {
+        if (window.confirm("Delete all conversation and history data? The org and the network membership are kept."))
+          clearHistory();
+      }}
+      title="Delete all conversation + history data (database + this view)"
+      className="ml-auto flex items-center gap-1 mono text-[9px] uppercase tracking-wide px-2 py-1 rounded-sm transition-colors"
+      style={{ border: "1px solid var(--border)", color: "var(--muted)" }}
+      onMouseEnter={(e) => (e.currentTarget.style.color = "var(--coral)")}
+      onMouseLeave={(e) => (e.currentTarget.style.color = "var(--muted)")}
+    >
+      <Trash2 size={11} /> Clear history
+    </button>
+  );
+}
 
 export function HistoryView() {
   const order = useStore((s) => s.contextOrder);
@@ -12,11 +33,18 @@ export function HistoryView() {
 
   if (done.length === 0) {
     return (
-      <div className="h-full grid place-items-center p-6">
-        <div className="text-center max-w-[360px]">
-          <CheckCircle2 size={30} className="mx-auto mb-3" style={{ color: "var(--faint)" }} />
-          <div className="font-display text-[17px] font-bold text-ink mb-1">No completed goals yet</div>
-          <div className="text-[12px] text-muted leading-relaxed">Finished conversations move here automatically. Live ones stay in the Conversation tab; click any card to replay it in full.</div>
+      <div className="h-full flex flex-col">
+        <div className="flex items-center gap-2 px-3 pt-3">
+          <CheckCircle2 size={13} style={{ color: "var(--ok)" }} />
+          <span className="eyebrow">Completed goals</span>
+          <ClearHistoryButton />
+        </div>
+        <div className="flex-1 grid place-items-center p-6">
+          <div className="text-center max-w-[360px]">
+            <CheckCircle2 size={30} className="mx-auto mb-3" style={{ color: "var(--faint)" }} />
+            <div className="font-display text-[17px] font-bold text-ink mb-1">No completed goals yet</div>
+            <div className="text-[12px] text-muted leading-relaxed">Finished conversations move here automatically. Live ones stay in the Conversation tab; click any card to replay it in full.</div>
+          </div>
         </div>
       </div>
     );
@@ -28,7 +56,7 @@ export function HistoryView() {
         <CheckCircle2 size={13} style={{ color: "var(--ok)" }} />
         <span className="eyebrow">Completed goals</span>
         <span className="mono text-[9.5px] text-faint">· {done.length}</span>
-        <span className="ml-auto mono text-[9px] text-faint">click any goal to replay it</span>
+        <ClearHistoryButton />
       </div>
       <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(290px, 1fr))" }}>
         {done.map((cid) => <HistoryCard key={cid} cid={cid} />)}

@@ -331,55 +331,66 @@ match.
 
 Push notifications let an agent call a client back at a registered webhook URL when something of
 interest happens — especially valuable for long-running tasks, where keeping a connection open the whole
-time is impractical. Atlas implements none of this; it keeps clients current by pushing to the browser
-over its own event stream instead.
+time is impractical. Atlas now **implements** this at its external edge: a client registers a webhook for a
+task, and Atlas POSTs a status update to it whenever the task changes state (alongside the browser event
+stream it already had).
 
-**PushNotificationConfig object** *(Not implemented).* The configuration object that records where a
-callback should be sent and how (the URL, any authentication, which events). Atlas does not define it.
+**PushNotificationConfig object** *(Implemented).* The configuration object recording where a callback
+should be sent and how (the URL, an opaque validation token, any authentication). Atlas defines
+`PushNotificationConfig` and `TaskPushNotificationConfig` as spec-shaped types.
 
-**Webhook registration and delivery** *(Not implemented).* The actual machinery to accept a callback URL
-and then deliver HTTP calls to it when events occur. None of this exists in Atlas.
+**Webhook registration and delivery** *(Implemented).* A small subsystem (`atlas/push`) subscribes to the
+same event broker that feeds the browser and, on every task-state change, POSTs a spec-shaped status update
+to each webhook registered for that task — best-effort, on the single event loop. This is the
+server-to-server delivery the spec is about, and it reuses the Router's event stream rather than bypassing it.
 
-**pushNotificationConfig/\* methods** *(Not implemented).* The set of methods to create, read, list, and
-delete those callback configurations. None are implemented.
+**pushNotificationConfig/\* methods** *(Implemented).* Create / read / list / delete the callback
+configurations, exposed over the REST edge at `/api/tasks/{id}/push-notification-configs` — the control
+plane a client uses to manage its own webhooks per task.
 
-**capabilities.pushNotifications** *(Partial).* The card flag advertising whether the agent supports
-push at all. Atlas keeps the flag but leaves it `false` everywhere — an honest advertisement of "no
-push," which is why it is partial rather than simply absent.
+**capabilities.pushNotifications** *(Implemented).* The card flag advertising whether the agent supports
+push. Now that delivery is real the flag is set `true` and is honest — the advertisement matches the
+behaviour.
 
-**PushNotificationNotSupportedError** *(Not implemented).* The standard error an agent should return if a
-client asks for push when the agent cannot do it. Atlas never surfaces this error.
+**PushNotificationNotSupportedError** *(Not implemented — moot).* The error an agent returns when it
+*cannot* do push. Atlas now can, so this refusal never applies and is correctly absent.
 
 ## 7. Authentication and security schemes
 
 This section is about transport-level security: proving *who a caller is* before letting them act, using
-standard schemes such as API keys, OAuth2, OpenID Connect, or mutual TLS. Because there is no network
-between Atlas's agents, there is nothing to authenticate at this layer — so the whole section is largely
-not applicable.
+standard schemes such as API keys, OAuth2, OpenID Connect, or mutual TLS. Atlas's agents talk in-process
+(nothing to authenticate between them), but its **one real socket — the browser/API edge — can now be
+gated**, so this section is no longer "not applicable": Atlas declares the schemes on the card and enforces
+an API key at the edge.
 
-**securitySchemes on the card** *(Partial).* The card's list of authentication methods the agent
-accepts. Atlas keeps the field present but always empty.
+**securitySchemes on the card** *(Implemented).* The card's list of authentication methods the agent
+accepts. Every card now declares the five A2A scheme objects (apiKey / http-bearer / oauth2 / oidc / mtls)
+rather than an empty map, and the apiKey scheme is the one actually enforced.
 
-**API-key / HTTP / OAuth2 / OIDC / mTLS schemes** *(Not implemented).* The concrete scheme types A2A
-borrows from standard web security. Atlas models none of them, because in-process agents present no
-credentials.
+**API-key / HTTP bearer schemes** *(Implemented)* — and **OAuth2 / OIDC / mTLS** *(Partial, declared only).*
+All five scheme types are now modelled spec-shaped. API-key (and the equivalent HTTP bearer) are enforced
+at the edge; OAuth2, OpenID Connect, and mutual TLS are declared for external A2A clients but not enforced
+in-process — there is no IdP or TLS-terminating transport here to enforce them against.
 
-**security (required schemes)** *(Not implemented).* The statement of which schemes a caller must
-satisfy to be admitted. Absent, since there is nothing to require.
+**securityRequirements (required schemes)** *(Implemented).* The statement of which schemes a caller must
+satisfy. The card declares the apiKey scheme as required (`[{apiKey: []}]`), and the edge honours it when a
+key is configured.
 
-**Authenticated requests, 401 / 403 handling** *(Not implemented).* Actually checking credentials on
-incoming requests and refusing the unauthorised ones with the standard 401/403 responses. The UI edge
-has no authentication, and in-process agents need none, so this is not done.
+**Authenticated requests, 401 / 403 handling** *(Implemented).* An opt-in edge guard: set `ATLAS_API_KEY`
+and every `/api/*` request (except `/api/healthz`) must present the key — via the X-API-Key header, an
+Authorization: Bearer token, or `?key=` for the SSE stream — returning **401** when it is missing and
+**403** when it is wrong. Off by default, so the bundled console is unaffected unless a key is set (and then
+it is served the key inline).
 
-**Webhook authentication** *(Not implemented).* Securing the callback channel so only the real agent can
-post to a client's webhook. There are no webhooks in Atlas to secure.
+**Webhook authentication** *(Implemented).* Outbound webhook calls carry the client's registered token and
+any bearer credentials, so a receiver can verify a push is genuine.
 
 A clarification worth stating plainly, because it is easy to conflate the two: Atlas's need-to-know
 system — the owner agent's share / redact / deny / escalate decision, followed by the deterministic
-Policy Engine review — is an application-level **authorisation** layer. It decides *who may see what*,
-and it travels inside messages. That is a different concern from A2A transport-level **authentication**,
-which proves *who you are*. Atlas has rich authorisation and no transport authentication, and only the
-latter is what this section measures.
+Policy Engine review — is an application-level **authorisation** layer. It decides *who may see what*, and
+it travels inside messages. That is a different concern from transport-level **authentication**, which
+proves *who you are*. Atlas now has both: rich in-message authorisation, and opt-in authentication at its
+one real edge (the browser/API socket).
 
 ## 8. Extensions mechanism
 
@@ -445,29 +456,25 @@ protocol version to speak. Atlas does no version handling at all (see section 4)
 
 ## Summary: what the totals mean
 
-Counting the actual feature rows across all nine sections gives **87 features**, distributed as **28
-Implemented, 22 Partial, 34 Not implemented, and 3 By design**. By section: Agent Card and discovery has
-6 implemented, 7 partial, 9 not implemented; Core data objects has 15 implemented, 6 partial, 1 not
-implemented; RPC methods has 1 implemented, 3 partial, 5 not implemented; Transports has 1 partial, 3
-not implemented, 2 by design; Streaming has 2 implemented, 1 partial, 4 not implemented; Push
-notifications has 1 partial, 4 not implemented; Authentication has 1 partial, 4 not implemented;
-Extensions has 4 implemented, 1 partial, 2 not implemented; and Error handling has 1 partial, 2 not
-implemented, 1 by design.
-
-(One correction to be transparent about: the summary table inside `a2a.md` adds these up as 29 / 22 /
-37 / 3 = 91, but a row-by-row recount gives 28 / 22 / 34 / 3 = 87 — its section-2 implemented count is
-one too high, 15 rather than 16, and its section-3 not-implemented count is three too high, 5 rather
-than 8. The individual feature rows are correct; only the summary arithmetic is off.)
+The audit totals **90 features — 39 Implemented, 21 Partial, 27 Not implemented, and 3 By design** —
+matching the summary table in [`a2a.md`](./a2a.md) and the three status-split files
+([implemented](./a2a-implemented.md) / [partial](./a2a-partial.md) / [not-implemented](./a2a-not-implemented.md)),
+which are the authoritative per-section and per-row source. (This plain-language companion walks the
+same features in prose and groups a handful of borderline rows slightly differently — for example the
+non-spec top-level `extensions` array, counted here as in-process-implemented but as Partial in the
+split — so a manual count of the prose can land a few off; defer to the split files for the exact tally.)
 
 The shape of those numbers is the whole story, and it follows directly from the one fact at the top.
 The Implemented entries cluster where A2A describes *objects and behaviour* — agent cards, messages,
 parts, tasks, the full set of task states, the message-send path, and the extensions mechanism — all of
 which Atlas reproduces faithfully in-process. The Not-implemented entries cluster where A2A describes
-the *network* — JSON-RPC, gRPC, the standard REST binding, well-known-URL discovery, A2A streaming, push
-notifications, and security schemes — none of which a single-process system needs. Partial mostly marks
-fields that exist but go unused, or are shaped slightly differently from the spec, and By design marks
-the three things one process makes meaningless on purpose: a JSON-RPC envelope between agents,
-multi-transport equivalence, and JSON-RPC error objects.
+the on-the-wire *network* — JSON-RPC, gRPC, the standard REST binding, well-known-URL discovery, A2A
+streaming, and the named error types — none of which a single-process system needs; the external-edge
+features a single process *can* honour — push notifications (real webhook delivery) and edge
+authentication (an opt-in API key) — are now implemented. Partial mostly marks fields that exist but go
+unused, or are shaped slightly differently from the spec, and By design marks the three things one
+process makes meaningless on purpose: a JSON-RPC envelope between agents, multi-transport equivalence,
+and JSON-RPC error objects.
 
 In one sentence: Atlas is a faithful in-process model of A2A's data and behaviour, not a networked A2A
 service — and that single design choice explains almost every status in this document.

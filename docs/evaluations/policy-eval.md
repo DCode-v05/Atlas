@@ -1,5 +1,11 @@
 # Policy Engine Evaluation
 
+> **⚠️ Stale since 2026-06-24 — the policy changed after this capture.** The rule formerly `LEAST-PRIV-DENY`
+> was renamed `LEAST-PRIV-ESCALATE` and now **escalates** (out-of-scope restricted/secret data is routed to a
+> human) instead of denying. So the `deny (LEAST-PRIV-DENY)` rows and the `LEAST-PRIV-DENY: 2` tally below would
+> now read `escalate (LEAST-PRIV-ESCALATE)`. The hard denials (clearance gate, PII-purpose, PCI-no-nexus) are
+> unchanged. Re-run `scripts/policy_eval.py` to regenerate against current behaviour.
+
 This report measures how the deterministic Policy Engine affects sharing decisions, across 15 scenarios chosen to depend on policy. For each scenario the owner agent makes one real decision (Mistral on Amazon Bedrock); that is the outcome **without** the engine. The Policy Engine then reviews the same decision; that is the outcome **with** the engine. The only difference between the two is the engine.
 
 Because the live model is non-deterministic and often escalates the most sensitive items on its own, a third column gives the engine's **guaranteed floor**: its review of a hypothetical full share. The floor is what the engine enforces no matter how permissive the owner happens to be.

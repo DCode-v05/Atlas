@@ -17,7 +17,9 @@ from atlas.runtime import build_runtime
 
 @pytest.fixture
 async def client(offline_llm):
-    settings = Settings(seed=42, hitl_timeout_seconds=0.0)
+    # hermetic: _env_file=None so the dev's real .env (e.g. ATLAS_API_KEY) can't leak in and
+    # silently switch on the edge auth gate, which would 401 every request in these tests.
+    settings = Settings(seed=42, hitl_timeout_seconds=0.0, _env_file=None)
     rt = build_runtime(settings, step_delay=0.0, llm=offline_llm)
     app = create_app()
     app.state.runtime = rt
@@ -43,12 +45,14 @@ async def test_org_endpoint_exposes_per_agent_goal(client):
 
 async def test_agent_card_endpoint(client):
     c, _ = client
-    r = await c.get("/api/agents/AGT-001/card")
+    aid = (await c.get("/api/org")).json()["nodes"][0]["id"]
+    assert aid.startswith("SEP-")  # opaque SEP-<16 digits> id
+    r = await c.get(f"/api/agents/{aid}/card")
     assert r.status_code == 200
     body = r.json()
-    assert body["card"]["id"] == "AGT-001"
+    assert body["card"]["id"] == aid
     assert body["goal"]  # standing responsibility surfaced on the card
-    assert body["user"]["agent_id"] == "AGT-001"  # associated 1:1 user
+    assert body["user"]["agent_id"] == aid  # associated 1:1 user
     assert (await c.get("/api/agents/NOPE/card")).status_code == 404
 
 
@@ -56,19 +60,22 @@ async def test_users_endpoint_is_1to1_with_agents(client):
     c, _ = client
     data = (await c.get("/api/users")).json()
     assert data["count"] == 100
-    assert {u["agent_id"] for u in data["users"]} == {f"AGT-{i:03d}" for i in range(1, 101)}
+    org_ids = {n["id"] for n in (await c.get("/api/org")).json()["nodes"]}
+    assert {u["agent_id"] for u in data["users"]} == org_ids  # 1:1 bijection with the org
+    assert all(u["agent_id"].startswith("SEP-") for u in data["users"])
 
 
 async def test_prompt_attributed_to_user(client):
     c, _ = client
+    u = (await c.get("/api/users")).json()["users"][0]
     r = await c.post(
         "/api/prompt",
-        json={"prompt": "what is the engineering API style guide?", "user_id": "user-AGT-050"},
+        json={"prompt": "what is the engineering API style guide?", "user_id": u["user_id"]},
     )
     data = r.json()
     if not data.get("rejected"):
-        assert data["submitted_by"]["user_id"] == "user-AGT-050"
-        assert data["submitted_by"]["agent_id"] == "AGT-050"
+        assert data["submitted_by"]["user_id"] == u["user_id"]
+        assert data["submitted_by"]["agent_id"] == u["agent_id"]
     assert (await c.post("/api/prompt", json={"prompt": "hi", "user_id": "nope"})).status_code == 404
 async def test_projects_list_endpoint(client):
     c, _ = client
@@ -145,3 +152,35 @@ async def test_snapshot_export(client):
     snap = (await c.get("/api/snapshot")).json()
     assert snap["agent_count"] == 100
     assert "metrics" in snap and "events_recent" in snap
+
+
+async def test_push_notification_config_crud(client):
+    c, _ = client
+    data = (await c.post("/api/prompt", json={"prompt": "what is the engineering API style guide?"})).json()
+    assert not data.get("rejected")
+    task_id = data["task_id"]
+
+    # set a webhook config for the task
+    r = await c.post(
+        f"/api/tasks/{task_id}/push-notification-configs",
+        json={"url": "https://example.test/hook", "token": "t1"},
+    )
+    assert r.status_code == 200
+    cfg = r.json()["pushNotificationConfig"]
+    cid = cfg["id"]
+    assert cfg["url"] == "https://example.test/hook" and cfg["token"] == "t1"
+
+    # list + get
+    listed = (await c.get(f"/api/tasks/{task_id}/push-notification-configs")).json()["configs"]
+    assert any(x["id"] == cid for x in listed)
+    assert (await c.get(f"/api/tasks/{task_id}/push-notification-configs/{cid}")).status_code == 200
+
+    # delete → then it's gone
+    assert (await c.delete(f"/api/tasks/{task_id}/push-notification-configs/{cid}")).status_code == 200
+    assert (await c.get(f"/api/tasks/{task_id}/push-notification-configs/{cid}")).status_code == 404
+
+    # a config for an unknown task is rejected, and the card advertises push
+    assert (await c.post("/api/tasks/UNKNOWN/push-notification-configs", json={"url": "x"})).status_code == 404
+    aid = (await c.get("/api/org")).json()["nodes"][0]["id"]
+    card = (await c.get(f"/api/agents/{aid}/card")).json()["card"]
+    assert card["capabilities"]["pushNotifications"] is True

@@ -328,13 +328,13 @@ class BedrockProvider(LLMProvider):
             "You are the dispatcher for a software company. Read the full employee directory and "
             "the incoming task, then choose the SINGLE best-fit employee to own it — match the task "
             "to the person's role, department, and skills, and prefer seniority for strategy/approval "
-            "work. Reply with ONLY that employee's id (for example AGT-042), nothing else."
+            "work. Reply with ONLY that employee's id (for example SEP-0123456789012345), nothing else."
         )
         user = f'Incoming task: "{prompt}"\n\nEmployee directory:\n{directory}\n\nBest-fit employee id:'
-        out = await self._chat(self.reasoning_model, system, user, max_tokens=16, temperature=0.0)
+        out = await self._chat(self.reasoning_model, system, user, max_tokens=24, temperature=0.0)
         if not out:
             return None
-        m = re.search(r"AGT-\d+", out.upper())
+        m = re.search(r"SEP-\d+", out.upper())
         return m.group(0) if m else None
 
     # ── routing re-rank (reasoning model) ──────────────────────────────────
