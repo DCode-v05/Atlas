@@ -7,6 +7,11 @@ services:
       - "8000:8000"
     environment:
       ATLAS_SEED: "42"
+      # Multi-org federation: number of sealed 100-agent orgs (1 = single-org demo). Works with
+      # the bundled Postgres — each org is namespaced in the shared DB, so >1 needs no other
+      # change. The cross-org AUTO-FALLBACK trigger requires the DB (it is membership-gated), so
+      # with >1 use the UI's Network → Join all on each org to populate membership.
+      ATLAS_ORG_COUNT: "${ATLAS_ORG_COUNT:-1}"
       ATLAS_CRON_GOAL_SECONDS: "${ATLAS_CRON_GOAL_SECONDS:-30}"
       AWS_REGION: ${AWS_REGION:-us-east-1}
       # REQUIRED: Atlas runs real Mistral via Amazon Bedrock (user prompts AND cron)

@@ -30,7 +30,8 @@ from atlas.a2a.cards import agent_catalog, extended_agent_card, public_agent_car
 from atlas.api.projects import build_project_view, list_projects
 from atlas.api.viewmodels import agent_card_view, build_org_view, thread_view
 from atlas.config import get_settings
-from atlas.events import EventType
+from atlas.conversation.intent import build_request_intent
+from atlas.events import CrossOrgExchangePayload, EventType
 from atlas.org.ext_models import ShareOutcome
 from atlas.runtime import build_runtime
 from atlas.store import export_snapshot
@@ -38,11 +39,34 @@ from atlas.store import export_snapshot
 router = APIRouter(prefix="/api")
 
 
+def _fed(request: Request):
+    """The federation, when this deployment runs more than one org; else None."""
+    return getattr(request.app.state, "federation", None)
+
+
 def _rt(request: Request):
+    """The runtime to serve. In a federation, an ``?org_id=`` query param selects which sealed
+    org (so org/teams/roster/network/projects/prompt/cron scope to the org the UI has chosen);
+    absent or single-org ⇒ the primary. Pooled data (metrics/HITL/history) lives on the shared
+    singletons, so it is the same whichever org's runtime is returned."""
+    fed = _fed(request)
+    if fed is not None:
+        org_id = request.query_params.get("org_id")
+        if org_id and org_id in fed.orgs:
+            return fed.runtime_for(org_id)
     rt = getattr(request.app.state, "runtime", None)
     if rt is None:  # pragma: no cover
         raise HTTPException(503, "runtime not ready")
     return rt
+
+
+def _member_count(rt) -> int:
+    if rt.network is not None:
+        try:
+            return len(rt.network.members())
+        except Exception:  # pragma: no cover
+            return 0
+    return len(rt.snapshot.agents)  # in-memory mode is always-live (no membership gating)
 
 
 # ── read endpoints ────────────────────────────────────────────────────────────
@@ -54,8 +78,126 @@ def healthz(request: Request):
 
 
 @router.get("/org")
-def org(request: Request):
+def org(request: Request, org_id: Optional[str] = None):
+    """The org structure the UI graphs. In a federation, ``?org_id=`` selects which org (the
+    switcher refetches this); absent, it's the primary org. (``org_id`` is resolved by ``_rt``.)"""
     return build_org_view(_rt(request))
+
+
+@router.get("/orgs")
+def orgs(request: Request):
+    """The organisations in this deployment — one in the single-org demo, N in a federation.
+    The UI's org switcher is built from this; each org is a sealed private network."""
+    fed = _fed(request)
+    if fed is None:
+        rt = _rt(request)
+        s = rt.snapshot
+        return {"count": 1, "orgs": [{
+            "org_id": s.org_id, "org_name": s.org_name, "agents": len(s.agents),
+            "members": _member_count(rt), "primary": True,
+        }]}
+    primary_id = fed.primary.org_id
+    out = []
+    for oid, org_rt in fed.orgs.items():
+        out.append({
+            "org_id": oid, "org_name": org_rt.org_name, "agents": len(org_rt.snapshot.agents),
+            "members": _member_count(fed.runtime_for(oid)), "primary": oid == primary_id,
+        })
+    return {"count": len(out), "orgs": out}
+
+
+@router.get("/federation/items")
+def federation_items(request: Request, org_id: str):
+    """Every ContextItem an org owns — the operator god-view picks one to send across the
+    boundary. (Operators see all; a *foreign org* never could — only PUBLIC items cross.)"""
+    fed = _fed(request)
+    if fed is None or org_id not in fed.orgs:
+        raise HTTPException(404, "unknown org")
+    org_rt = fed.orgs[org_id]
+    return {
+        "org_id": org_id, "org_name": org_rt.org_name,
+        "items": [
+            {
+                "item_id": it.item_id, "title": it.title, "sensitivity": it.sensitivity.value,
+                "owner_id": it.owner_agent_id, "owner_name": org_rt.registry.get(it.owner_agent_id).name,
+            }
+            for it in org_rt.snapshot.items.values()
+        ],
+    }
+
+
+@router.post("/federation/request")
+async def federation_request(request: Request, payload: dict = Body(...)):
+    """Operator-directed cross-org request through the FULL live pipeline: opens a real Task in the
+    source org and runs the cross-org scenario — threads + messages (Conversation/History) and an
+    operator-approval HITL gate on every would-cross share. Unlike `/exchange` (a synchronous policy
+    probe), this returns a task to watch; only PUBLIC information crosses, and only on approval."""
+    fed = _fed(request)
+    if fed is None or len(fed.orgs) < 2:
+        raise HTTPException(409, "federation is not enabled (set ATLAS_ORG_COUNT > 1)")
+    target_org_id = payload.get("target_org_id")
+    if not target_org_id or target_org_id not in fed.orgs:
+        raise HTTPException(404, "unknown target org")
+    source_org_id = payload.get("source_org_id") or fed.primary.org_id
+    if source_org_id == target_org_id or source_org_id not in fed.orgs:
+        raise HTTPException(400, "source org must be a different federation member")
+    prompt = (payload.get("prompt") or "").strip()
+    if not prompt:
+        raise HTTPException(400, "prompt is required")
+    result = await fed.orgs[source_org_id].orchestrator.run_cross_org_prompt(
+        prompt, target_org_id, requester_id=payload.get("requester_id"))
+    return {"source_org": source_org_id, **result}
+
+
+@router.post("/federation/exchange")
+async def federation_exchange(request: Request, payload: dict = Body(...)):
+    """Operator-directed cross-org request: have one org ask another for a specific item. The
+    TARGET org's own machinery decides under the federation boundary — only PUBLIC information
+    may cross; internal/confidential/restricted/secret is denied. Returns the boundary
+    decision and emits a ``federation.exchange`` event naming both orgs."""
+    fed = _fed(request)
+    if fed is None or len(fed.orgs) < 2:
+        raise HTTPException(409, "federation is not enabled (set ATLAS_ORG_COUNT > 1)")
+    target_org_id = payload.get("target_org_id")
+    if not target_org_id or target_org_id not in fed.orgs:
+        raise HTTPException(404, "unknown target org")
+    target = fed.orgs[target_org_id]
+    item = target.snapshot.items.get(payload.get("item_id"))
+    if item is None:
+        raise HTTPException(404, "unknown item in target org")
+    source_org_id = payload.get("source_org_id") or fed.primary.org_id
+    if source_org_id == target_org_id or source_org_id not in fed.orgs:
+        raise HTTPException(400, "source org must be a different federation member")
+    source = fed.orgs[source_org_id]
+    requester = source.snapshot.agents.get(payload.get("requester_id") or source.snapshot.ceo_id)
+    if requester is None:
+        raise HTTPException(404, "unknown requester in source org")
+    owner = target.registry.get(item.owner_agent_id)
+
+    intent = build_request_intent(requester.profile, item)
+    context_id = new_id("xorg-")
+    decision = await fed.gateway.request_across(
+        requester=requester, target_org_id=target_org_id, item=item, intent=intent, context_id=context_id,
+    )
+    crossed = decision.outcome in (ShareOutcome.SHARE, ShareOutcome.REDACT) and decision.delivered_body is not None
+    evt = CrossOrgExchangePayload(
+        source_org_id=source_org_id, source_org_name=source.org_name,
+        target_org_id=target_org_id, target_org_name=target.org_name,
+        requester_id=requester.id, requester_name=requester.name,
+        owner_id=owner.id, owner_name=owner.name,
+        item_id=item.item_id, item_title=item.title, sensitivity=item.sensitivity.value,
+        outcome=decision.outcome.value, rule_id=decision.rule_id or "", reason=decision.reason or "",
+        crossed=crossed,
+    )
+    fed.shared.broker.emit(EventType.CROSS_ORG_EXCHANGE, evt, context_id=context_id, org_id=target_org_id)
+    return {
+        "context_id": context_id, "outcome": decision.outcome.value, "crossed": crossed,
+        "rule_id": decision.rule_id, "reason": decision.reason,
+        "delivered_title": decision.delivered_title, "delivered_body": decision.delivered_body,
+        "item": {"item_id": item.item_id, "title": item.title, "sensitivity": item.sensitivity.value},
+        "source_org": {"org_id": source_org_id, "org_name": source.org_name, "requester": requester.name},
+        "target_org": {"org_id": target_org_id, "org_name": target.org_name, "owner": owner.name},
+    }
 
 
 @router.get("/agents/{agent_id}/card")
@@ -428,6 +570,21 @@ async def hitl_deny(request_id: str, request: Request):
 @router.post("/reset")
 async def reset(request: Request):
     app = request.app
+    old_fed = _fed(request)
+    if old_fed is not None:  # federation: tear down + rebuild every org
+        from atlas.runtime import build_federation
+
+        for oid in old_fed.orgs:
+            ort = old_fed.runtime_for(oid)
+            await ort.registry.stop_heartbeat()
+            await ort.cron.stop()
+        fed = build_federation(get_settings())
+        app.state.federation = fed
+        new = fed.runtime_for(fed.primary.org_id)
+        app.state.runtime = new
+        for oid in fed.orgs:
+            await fed.runtime_for(oid).registry.start_heartbeat()
+        return {"ok": True, "orgs": len(fed.orgs), "agents": len(new.snapshot)}
     old = getattr(app.state, "runtime", None)
     if old is not None:
         await old.registry.stop_heartbeat()

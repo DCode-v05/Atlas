@@ -213,7 +213,8 @@ deterministic text), so they run without a key — it is never used by the app.
 `ATLAS_BEDROCK_REASONING_MODEL` / `ATLAS_BEDROCK_PHRASING_MODEL` (model overrides) ·
 **`ATLAS_DATABASE_URL`** (unset = in-memory; set = Postgres persistence + the authenticated
 network — see below; `docker compose up` defaults it to the bundled `postgres` service) ·
-`ATLAS_API_KEY` (opt-in operator edge auth) · `ATLAS_NETWORK_SESSION_TTL_SECONDS` (43200).
+`ATLAS_API_KEY` (opt-in operator edge auth) · `ATLAS_NETWORK_SESSION_TTL_SECONDS` (43200) ·
+**`ATLAS_ORG_COUNT`** (1 = single-org demo; >1 = a federation of N sealed orgs — see below).
 
 ## Persistence + the authenticated network (opt-in, `ATLAS_DATABASE_URL`)
 
@@ -236,6 +237,74 @@ Off by default → fully in-memory (every in-memory test unchanged). When set, t
   (UI: **Network → Join all**). This is by design (selective membership); to demo the old
   always-live behavior, leave `ATLAS_DATABASE_URL` unset.
 
+## Multi-org federation (opt-in, `ATLAS_ORG_COUNT > 1`)
+
+A single org is a **private network** of 100 agents talking freely over one in-process Router.
+A **federation** (`atlas/federation`) runs **N such sealed orgs** at once and lets them talk
+to each other **publicly**, the way two real companies do:
+
+- **Inside an org**: unchanged — full need-to-know sharing, the two-layer owner-LLM + Policy
+  Engine decision. Detailed, unrestricted-about-the-org.
+- **Between orgs**: only **PUBLIC** information may cross; internal / confidential / restricted /
+  secret stays in the building. Enforced by the Policy Engine's **`CROSS-ORG-RESTRICT`** rule
+  (hard DENY for anything above PUBLIC; NIST 800-53 AC-4 information-flow). "Only the necessary
+  things leave."
+
+The boundary's integrity is **structural**, not a flag you must remember to set:
+
+- **`build_federation`** (`atlas/runtime.py`) builds the cross-cutting singletons **once**
+  (broker, llm, hitl, trace, push, metrics, db/dbwriter) and **N sealed orgs** off them — each
+  with its **own** registry / router / network / orchestrator / cron. `org_count == 1` yields
+  one org byte-identical to `build_runtime()` (the historical demo), so every existing test
+  stays green. Each org is seeded `seed + index` ⇒ disjoint `SEP-<16 digits>` ids.
+- **Each org is a different *company*** (`atlas/org/company.py`): a per-org `CompanyProfile` gives
+  peers their own **projects**, their own **people** (a rotated name pool ⇒ disjoint names, not
+  just ids), org-scoped emails/cards, and secrets **reskinned** to their projects. The line is
+  *vary identity & content, keep capability & structure*: **departments, headcounts, role
+  archetypes, and skill catalogs stay canonical** (so routing scores track and the membership-gated
+  cross-org fallback stays well-defined), and substitution **never** touches `topic_tags`/
+  `sensitivity` (so the Policy Engine classifies/tiers every org's items identically). `atlas`
+  (index 0) is the identity profile ⇒ byte-identical to the historical org.
+- An org's Router only knows **its own** registry, so an org's agents **cannot reach a peer**
+  except through the **`FederationGateway`** — the single door, exactly as the Router is the one
+  door inside an org. The gateway is the **sole origin of `cross_org=True`**.
+- A cross-org request is decided by the **target** org's own machinery (its owner agent + its
+  Policy Engine, `cross_org=True`): their data, their floor. Discovery across the boundary sees
+  peers' **PUBLIC** cards only (org-profile stripped) — never their hierarchy/clearances.
+
+**Cross-org runs through the FULL live pipeline** (`_run_cross_org_request` / `_cross_org_source`),
+not a bespoke side-path: the local requester (a joined member) opens a **thread** to the peer owner;
+messages go through the **Router** (a transport-only `external_ids` exemption lets a gateway-vouched
+peer agent be carried — the *decision* still happens in the gateway), so they **thread + persist to
+History**; the **Policy Engine** decides (`cross_org=True`); and every would-cross share is gated by
+an **operator-approval HITL** step (the same shared HITL queue + approve/deny endpoints) before any
+information leaves — non-public is hard-denied by policy with no human. **Triggers (both live +
+tested):** *auto-fallback* — under membership gating (DB on), a prompt finding **no local joined
+member** routes to the **single best peer** (`FederationGateway.route_to_peer`, one peer — never a
+fan-out). *operator-directed* — `POST /api/federation/request` opens a real Task and runs the same
+pipeline; `POST /api/federation/exchange` remains a synchronous policy *probe* (no Task/HITL).
+**API:** `GET /api/orgs` lists orgs; `GET /api/org?org_id=` returns one org's structure; events
+carry an optional **`org_id`** (null in N=1 ⇒ wire unchanged) and a **`federation.exchange`** event
+names both orgs. Every **org-scoped** read/action takes `?org_id=` (resolved centrally in
+`_rt(request)`) — so org/teams/roster/network/projects/**prompt**/cron target the chosen org.
+**UI:** when N>1 an **org-switcher dropdown** (top-right of the stage, replacing the old Federation
+tab) scopes the left Teams panel + Network/Roster/Projects **and the top chat-bar dispatch** to the
+chosen sealed org; the **Comms** view renders ALL orgs as one **hierarchical** graph (a Federation
+root → each org's CEO → its department rings). Conversations/metrics/HITL stay pooled across orgs on
+the shared broker, so **cross-org happens organically by dispatching from the chat-bar** a prompt the
+selected org can't fulfil locally (auto-fallback). The `/api/federation/*` endpoints remain for
+explicit operator-directed exchanges/requests.
+
+**Scope:** the federation works **in-memory AND with the DB** (`ATLAS_ORG_COUNT > 1` +
+`ATLAS_DATABASE_URL`). The only seed table whose key isn't seed-disjoint — the template-derived
+`context_items.item_id` — is namespaced by org **in the value** (peers get an `<org_id>:` prefix;
+the primary `atlas` keeps the raw id), each org gets its own network signing key, and `seed_org`
+is per-org idempotent, so N orgs coexist sealed in one database. Namespacing in the value (not as
+a new column) is deliberate: the table schema stays byte-identical, so an **existing** persisted
+database needs no migration (there is no Alembic). The **auto-fallback** trigger *requires* the DB
+(it is membership-gated; in pure in-memory mode every prompt always has a local owner, so there's
+nothing to fall back from). Set `ATLAS_ORG_COUNT` unset/1 for the original single-org behaviour.
+
 ## Repo layout
 
 ```
@@ -244,6 +313,7 @@ atlas/   a2a/ (protocol)  org/ (company+generator)  bus/ (router/discovery)
          hitl/  cron/  llm/  metrics/  events/ (SSE schema = the FE contract)
          push/ (A2A webhook delivery)  db/ (opt-in Postgres persistence + write-through)
          network/ (Ed25519 join-the-network auth + scoped JWT sessions)
+         federation/ (multi-org gateway: N sealed orgs, public-only boundary)
          api/  store/  main.py  runtime.py  config.py
 web/     React + Vite + TS mission-control UI (force-graph, Zustand, SSE)
 tests/   pytest suite     Dockerfile · docker-compose.yml

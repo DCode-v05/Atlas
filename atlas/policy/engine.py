@@ -36,21 +36,23 @@ def _finalize(item: ContextItem, outcome: ShareOutcome, rule_id: str, reason: st
 class PolicyEngine:
     """Stateless, deterministic compliance-review engine. Tighten-only."""
 
-    def _ctx(self, decision, requester, owner, item, intent, officer_id) -> Ctx:
+    def _ctx(self, decision, requester, owner, item, intent, officer_id, cross_org) -> Ctx:
         return Ctx(
             requester=requester, owner=owner, item=item, intent=intent,
             owner_outcome=decision.outcome, officer_id=officer_id,
             scoped=in_scope(item, requester), classes=classify(item),
             incident=is_incident_responder(requester, item, intent),
+            cross_org=cross_org,
         )
 
     def review(
         self, decision: ShareDecision, requester: OrgProfile, owner: OrgProfile,
-        item: ContextItem, intent: Intent, *, officer_id: str | None = None,
+        item: ContextItem, intent: Intent, *, officer_id: str | None = None, cross_org: bool = False,
     ) -> ShareDecision:
         """Return the owner's ``decision`` unchanged (concur), or a tightened
-        ``ShareDecision`` stamped ``rule_id="POLICY/<RULE>"``."""
-        ctx = self._ctx(decision, requester, owner, item, intent, officer_id)
+        ``ShareDecision`` stamped ``rule_id="POLICY/<RULE>"``. ``cross_org`` marks a request from a
+        DIFFERENT organisation — the federation boundary, where only PUBLIC data may cross."""
+        ctx = self._ctx(decision, requester, owner, item, intent, officer_id, cross_org)
         winner_rank = CONSERVATISM[decision.outcome]
         winner = (decision.outcome, decision.rule_id, decision.reason)
         for rule_id, fn in RULES:
@@ -68,10 +70,10 @@ class PolicyEngine:
 
     def explain(
         self, decision: ShareDecision, requester: OrgProfile, owner: OrgProfile,
-        item: ContextItem, intent: Intent, *, officer_id: str | None = None,
+        item: ContextItem, intent: Intent, *, officer_id: str | None = None, cross_org: bool = False,
     ) -> list[tuple[str, str, str]]:
         """Every firing rule as ``(rule_id, outcome, reason)`` — for audit / observability."""
-        ctx = self._ctx(decision, requester, owner, item, intent, officer_id)
+        ctx = self._ctx(decision, requester, owner, item, intent, officer_id, cross_org)
         fired: list[tuple[str, str, str]] = []
         for rule_id, fn in RULES:
             res = fn(ctx)

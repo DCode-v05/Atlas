@@ -29,6 +29,7 @@ function computeLayout(org: OrgView): Map<string, { x: number; y: number }> {
 }
 
 function linkColor(l: any): string {
+  if (l.hierarchy) return "rgba(120,132,148,0.28)"; // faint federation→org structural edges
   if (l.outcome) return OUTCOME_META[l.outcome]?.color ?? CHROME.muted;
   return intentColor(l.intent) ?? CHROME.accent;
 }
@@ -43,13 +44,40 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.closePath();
 }
 
+const ORG_GAP = 1500; // horizontal spacing between sealed-org clusters in the federated view
+const FED_ID = "__federation__";
+
+/** All orgs laid out side-by-side (each its own dept-ring), under a single Federation root —
+ *  the hierarchical all-orgs view. Agent ids are disjoint across orgs, so live links resolve. */
+function computeFederatedNodes(orgViews: Record<string, OrgView>, orderedIds: string[]): any[] {
+  const present = orderedIds.filter((id) => orgViews[id]);
+  const out: any[] = [];
+  present.forEach((oid, i) => {
+    const ov = orgViews[oid];
+    const pos = computeLayout(ov);
+    const offsetX = (i - (present.length - 1) / 2) * ORG_GAP;
+    for (const n of ov.nodes) {
+      const p = pos.get(n.id);
+      if (!p) continue;
+      out.push({ id: n.id, fx: p.x + offsetX, fy: p.y, level: n.level, dept: n.department, name: n.name, org: oid, orgName: ov.org_name });
+    }
+  });
+  out.push({ id: FED_ID, fx: 0, fy: -900, level: 7, dept: "federation", name: "Federation", org: null });
+  return out;
+}
+
 export function CommsGraph() {
   const org = useStore((s) => s.org);
+  const orgs = useStore((s) => s.orgs);
+  const orgViews = useStore((s) => s.orgViews);
   const liveLinks = useStore((s) => s.links);
   const statusMap = useStore((s) => s.status);
   const deptFilter = useStore((s) => s.deptFilter);
   const groups = useStore((s) => s.groups);
   const selectAgent = useStore((s) => s.selectAgent);
+
+  const orderedIds = useMemo(() => orgs.map((o) => o.org_id), [orgs]);
+  const federated = orgs.length > 1 && orderedIds.every((id) => orgViews[id]);
 
   const fgRef = useRef<any>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -70,33 +98,60 @@ export function CommsGraph() {
   }, [groups]);
 
   const nodes = useMemo(() => {
+    if (federated) {
+      const arr = computeFederatedNodes(orgViews, orderedIds);
+      arr.push({ id: "operator", fx: 0, fy: -1080, level: 6, dept: "operator", name: "Operator" });
+      return arr;
+    }
     if (!org) return [];
     const pos = computeLayout(org);
     const arr: any[] = org.nodes.map((n) => {
       const p = pos.get(n.id)!;
-      return { id: n.id, fx: p.x, fy: p.y, level: n.level, dept: n.department, name: n.name };
+      return { id: n.id, fx: p.x, fy: p.y, level: n.level, dept: n.department, name: n.name, org: null };
     });
     arr.push({ id: "operator", fx: 0, fy: -640, level: 6, dept: "operator", name: "Operator" });
     return arr;
-  }, [org]);
+  }, [org, federated, orgViews, orderedIds]);
 
-  // centroid + top of each department cluster, for the team-name labels on the map
+  // centroid + top of each department cluster (keyed per ORG so same-named depts don't merge
+  // across orgs in the federated view), for the team-name labels on the map.
   const deptCentroids = useMemo(() => {
-    const acc: Record<string, { sx: number; n: number; minY: number }> = {};
+    const acc: Record<string, { dept: string; sx: number; n: number; minY: number }> = {};
     for (const nd of nodes) {
-      if (nd.id === "operator") continue;
-      const a = acc[nd.dept] ?? (acc[nd.dept] = { sx: 0, n: 0, minY: Infinity });
+      if (nd.id === "operator" || nd.id === FED_ID) continue;
+      const key = `${nd.org ?? ""}:${nd.dept}`;
+      const a = acc[key] ?? (acc[key] = { dept: nd.dept, sx: 0, n: 0, minY: Infinity });
       a.sx += nd.fx;
       a.n += 1;
       a.minY = Math.min(a.minY, nd.fy);
     }
-    return Object.entries(acc).map(([dept, a]) => ({ dept, cx: a.sx / a.n, minY: a.minY, count: a.n }));
+    return Object.values(acc).map((a) => ({ dept: a.dept, cx: a.sx / a.n, minY: a.minY, count: a.n }));
   }, [nodes]);
 
-  const links = useMemo(
-    () => liveLinks.map((l) => ({ source: l.source, target: l.target, intent: l.intent, outcome: l.outcome, mode: l.mode })),
-    [liveLinks],
-  );
+  // per-org cluster label (the org name above each sealed network), federated view only.
+  const orgCentroids = useMemo(() => {
+    if (!federated) return [];
+    const acc: Record<string, { name: string; sx: number; n: number; minY: number }> = {};
+    for (const nd of nodes) {
+      if (!nd.org) continue;
+      const a = acc[nd.org] ?? (acc[nd.org] = { name: nd.orgName, sx: 0, n: 0, minY: Infinity });
+      a.sx += nd.fx;
+      a.n += 1;
+      a.minY = Math.min(a.minY, nd.fy);
+    }
+    return Object.values(acc).map((a) => ({ name: a.name, cx: a.sx / a.n, minY: a.minY, count: a.n }));
+  }, [nodes, federated]);
+
+  const links = useMemo(() => {
+    const live = liveLinks.map((l) => ({ source: l.source, target: l.target, intent: l.intent, outcome: l.outcome, mode: l.mode }));
+    if (!federated) return live;
+    // static hierarchy edges: the Federation root → each org's CEO (the "tree of orgs")
+    const hier = orderedIds
+      .map((id) => orgViews[id]?.ceo_id)
+      .filter(Boolean)
+      .map((ceo) => ({ source: FED_ID, target: ceo as string, hierarchy: true, mode: "individual" }));
+    return [...hier, ...live];
+  }, [liveLinks, federated, orgViews, orderedIds]);
 
   const data = useMemo(() => ({ nodes, links }), [nodes, links]);
 
@@ -107,14 +162,16 @@ export function CommsGraph() {
     }
   }, [nodes.length, size.w, size.h]);
 
-  if (!org) return <div ref={wrapRef} className="h-full w-full" />;
+  if (!org && !federated) return <div ref={wrapRef} className="h-full w-full" />;
 
   return (
     <div ref={wrapRef} className="h-full w-full relative overflow-hidden">
       <div className="absolute top-3 left-3.5 z-10 pointer-events-none flex items-center gap-2">
         <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--accent)" }} />
-        <span className="eyebrow">Live communication map</span>
-        <span className="mono text-[9.5px] text-faint">· {org.node_count} agents · {liveLinks.length} active</span>
+        <span className="eyebrow">{federated ? "Federation comms map" : "Live communication map"}</span>
+        <span className="mono text-[9.5px] text-faint">
+          · {federated ? `${orgs.length} orgs · ${orgs.reduce((a, o) => a + o.agents, 0)} agents` : `${org?.node_count ?? 0} agents`} · {liveLinks.length} active
+        </span>
       </div>
 
       <ForceGraph2D
@@ -130,19 +187,21 @@ export function CommsGraph() {
         onNodeHover={(n: any) => setHover(n?.id ?? null)}
         onNodeClick={(n: any) => n?.id !== "operator" && selectAgent(n.id)}
         linkColor={linkColor}
-        linkWidth={(l: any) => (l.mode === "group" ? 2.4 : l.outcome === "hitl" ? 2.2 : 1.4)}
-        linkDirectionalParticles={(l: any) => (l.outcome === "denied" ? 0 : 2)}
+        linkWidth={(l: any) => (l.hierarchy ? 0.8 : l.mode === "group" ? 2.4 : l.outcome === "hitl" ? 2.2 : 1.4)}
+        linkDirectionalParticles={(l: any) => (l.hierarchy || l.outcome === "denied" ? 0 : 2)}
         linkDirectionalParticleWidth={(l: any) => (l.mode === "group" ? 3 : 2.2)}
         linkDirectionalParticleColor={linkColor}
         linkDirectionalParticleSpeed={0.011}
         nodeCanvasObject={(node: any, ctx: CanvasRenderingContext2D) => {
           const { x, y } = node;
           if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+          const isFed = node.id === FED_ID;
           const isOp = node.id === "operator";
-          const r = isOp ? 8 : nodeRadius(node.level);
-          const status = isOp ? "idle" : statusMap[node.id] ?? "idle";
-          const base = isOp ? CHROME.accent : deptColor(node.dept);
-          const dim = deptFilter && !isOp && node.dept !== deptFilter ? 0.16 : 1;
+          const isRoot = isOp || isFed; // diamond-rendered roots
+          const r = isFed ? 11 : isOp ? 8 : nodeRadius(node.level);
+          const status = isRoot ? "idle" : statusMap[node.id] ?? "idle";
+          const base = isFed ? "#7c5cff" : isOp ? CHROME.accent : deptColor(node.dept);
+          const dim = deptFilter && !isRoot && node.dept !== deptFilter ? 0.16 : 1;
           ctx.globalAlpha = dim;
 
           if (status !== "idle") {
@@ -155,14 +214,14 @@ export function CommsGraph() {
             ctx.stroke();
             ctx.globalAlpha = dim;
           }
-          if (!isOp && groupMembers.has(node.id)) {
+          if (!isRoot && groupMembers.has(node.id)) {
             ctx.beginPath();
             ctx.arc(x, y, r + 6, 0, 2 * Math.PI);
             ctx.strokeStyle = "rgba(109,40,217,0.6)";
             ctx.lineWidth = 1.2;
             ctx.stroke();
           }
-          if (isOp) {
+          if (isRoot) {
             ctx.beginPath();
             ctx.moveTo(x, y - r);
             ctx.lineTo(x + r, y);
@@ -179,19 +238,38 @@ export function CommsGraph() {
           ctx.fillStyle = grad;
           ctx.fill();
           ctx.strokeStyle = "rgba(255,255,255,0.85)";
-          ctx.lineWidth = node.level >= 4 || isOp ? 1.4 : 0.8;
+          ctx.lineWidth = node.level >= 4 || isRoot ? 1.4 : 0.8;
           ctx.stroke();
           ctx.globalAlpha = 1;
         }}
         nodePointerAreaPaint={(node: any, color: string, ctx: CanvasRenderingContext2D) => {
           if (!Number.isFinite(node.x)) return;
-          const r = (node.id === "operator" ? 8 : nodeRadius(node.level)) + 3;
+          const r = (node.id === "operator" || node.id === FED_ID ? 10 : nodeRadius(node.level)) + 3;
           ctx.fillStyle = color;
           ctx.beginPath();
           ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
           ctx.fill();
         }}
         onRenderFramePost={(ctx: CanvasRenderingContext2D, scale: number) => {
+          // 0) ORG name above each sealed-network cluster (federated view)
+          if (federated) {
+            const ofpx = Math.max(13, 20 / scale);
+            ctx.font = `800 ${ofpx}px "JetBrains Mono", monospace`;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            for (const oc of orgCentroids) {
+              if (!Number.isFinite(oc.cx) || !Number.isFinite(oc.minY)) continue;
+              const label = oc.name.toUpperCase();
+              const w = ctx.measureText(label).width;
+              const py = oc.minY - 70;
+              ctx.fillStyle = "rgba(124,92,255,0.16)";
+              roundRect(ctx, oc.cx - w / 2 - 12, py - ofpx / 2 - 6, w + 24, ofpx + 12, 5);
+              ctx.fill();
+              ctx.fillStyle = "#7c5cff";
+              ctx.fillText(label, oc.cx, py);
+            }
+          }
+
           // 1) team / department name on each cluster (a colored pill above it)
           const dfpx = Math.max(10, 13 / scale);
           ctx.font = `700 ${dfpx}px "JetBrains Mono", monospace`;
@@ -219,9 +297,9 @@ export function CommsGraph() {
           ctx.font = `600 ${fpx}px "JetBrains Mono", monospace`;
           ctx.textBaseline = "top";
           for (const n of nodes) {
-            if (n.id !== "operator" && n.id !== hover) continue;
+            if (n.id !== "operator" && n.id !== FED_ID && n.id !== hover) continue;
             if (!Number.isFinite(n.x) || !Number.isFinite(n.y)) continue;
-            const r = n.id === "operator" ? 8 : nodeRadius(n.level);
+            const r = n.id === "operator" ? 8 : n.id === FED_ID ? 11 : nodeRadius(n.level);
             const w = ctx.measureText(n.name).width;
             const cx = n.x;
             const ty = n.y + r + 3.5;

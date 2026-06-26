@@ -204,13 +204,20 @@ class Router:
         group_id: Optional[str] = None,
         task: Optional[Task] = None,
         thinking: Optional[str] = None,
+        external_ids: Optional[set[str]] = None,
     ) -> Optional[Message]:
         # Network membership backstop: only joined agents (or the operator edge) use the bus.
         # The orchestrator already routes within the network; this enforces the invariant.
+        # ``external_ids`` is a TRANSPORT-ONLY exemption for federation cross-org participants: a
+        # peer-org agent is not in THIS org's network, but the FederationGateway has already
+        # authorised the exchange (the share DECISION is made there, under the Policy Engine with
+        # cross_org=True). This only lets the Router carry/thread/persist an already-authorised
+        # message — it never decides anything.
+        ext = external_ids or set()
         if self.network is not None and getattr(self.network, "active", False):
-            if sender != "operator" and not self.network.is_member(sender):
+            if sender != "operator" and sender not in ext and not self.network.is_member(sender):
                 return None
-            recipients = [r for r in recipients if r == "operator" or self.network.is_member(r)]
+            recipients = [r for r in recipients if r == "operator" or r in ext or self.network.is_member(r)]
             if not recipients:
                 return None
         meta: dict = {}

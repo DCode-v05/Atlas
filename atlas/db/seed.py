@@ -8,7 +8,7 @@ duplicate or clobber.
 
 from __future__ import annotations
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, select
 
 from atlas.db.models import (
     AgentCredentialRow,
@@ -43,9 +43,15 @@ async def clear_history(db) -> dict[str, int]:
 
 
 async def seed_org(db, snapshot: OrgSnapshot) -> bool:
-    """Seed the org + credentials if empty. Returns True if it seeded, False if already present."""
+    """Seed the org + credentials if empty. Returns True if it seeded, False if already present.
+
+    Idempotency is **per-org** (keyed on this org's CEO row), so a federation seeds every org
+    into the shared DB — checking a global ``AgentRow`` count would let the first org seed and
+    silently skip all the others (their agent ids are disjoint, so they never collide)."""
     async with db.session() as s:
-        existing = (await s.execute(select(func.count()).select_from(AgentRow))).scalar_one()
+        existing = (
+            await s.execute(select(AgentRow.id).where(AgentRow.id == snapshot.ceo_id))
+        ).scalar_one_or_none()
         if existing:
             return False
 
@@ -61,9 +67,16 @@ async def seed_org(db, snapshot: OrgSnapshot) -> bool:
             priv, pub = generate_keypair()
             s.add(AgentCredentialRow(agent_id=ag.id, public_key=pub, private_key=priv, algo="Ed25519"))
 
+        # Namespace the (template-derived) item id by org so a federation's orgs coexist in one DB.
+        # The primary org keeps the historical raw id (so an existing single-org DB is byte-identical);
+        # peers get an "<org_id>:" prefix. context_items is a write-only mirror, so this never affects
+        # the live path (which uses the in-memory snapshot).
+        def _row_item_id(raw: str) -> str:
+            return raw if snapshot.org_id == "atlas" else f"{snapshot.org_id}:{raw}"
+
         for it in snapshot.items.values():
             s.add(ContextItemRow(
-                item_id=it.item_id, owner_agent_id=it.owner_agent_id, title=it.title, body=it.body,
+                item_id=_row_item_id(it.item_id), owner_agent_id=it.owner_agent_id, title=it.title, body=it.body,
                 sensitivity=it.sensitivity.value, scope=it.scope.value, scope_ref=it.scope_ref,
                 min_clearance=it.min_clearance, redacted_summary=it.redacted_summary,
                 topic_tags=list(it.topic_tags),

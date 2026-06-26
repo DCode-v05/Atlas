@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     # Determinism: a single seed drives org generation and the cron sequence.
     seed: int = 42
 
+    # Multi-org federation. Number of independent 100-agent organisations ("private
+    # networks") to run side by side. Each is seeded deterministically off ``seed`` and
+    # is fully sealed — its Router only knows its own agents; orgs communicate ONLY
+    # through the federation gateway, where only PUBLIC information may cross the boundary.
+    # 1 (default) = the original single-org demo, unchanged.
+    org_count: int = 1
+
     # Cron simulation. Two modes, selected by ``cron_loop``:
     #   • burst (default): when toggled on it runs a single ~15s burst
     #     (``cron_burst_seconds``) of autonomous goals, then auto-stops.

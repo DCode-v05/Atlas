@@ -16,13 +16,14 @@ export function ProjectsWorkspace() {
   const [active, setActive] = useState<string | null>(null);
   const [view, setView] = useState<ProjectView | null>(null);
   const selectAgent = useStore((s) => s.selectAgent);
+  const selectedOrg = useStore((s) => s.selectedOrg); // re-fetch when the federation org switches
 
   useEffect(() => {
     api.projects().then((r) => {
       setList(r.projects);
-      if (r.projects.length && !active) setActive(r.projects[0].project_id);
+      setActive(r.projects.length ? r.projects[0].project_id : null);
     }).catch(console.error);
-  }, []);
+  }, [selectedOrg]);
 
   useEffect(() => {
     if (!active) return;

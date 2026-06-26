@@ -8,6 +8,7 @@ from atlas.events.schema import (
     ContextSharePayload,
     CronStatePayload,
     CronTickPayload,
+    CrossOrgExchangePayload,
     DiscoveryMatchedPayload,
     Event,
     EventType,
@@ -52,4 +53,5 @@ __all__ = [
     "TraceSpanPayload",
     "PushDeliveredPayload",
     "NetworkMemberPayload",
+    "CrossOrgExchangePayload",
 ]

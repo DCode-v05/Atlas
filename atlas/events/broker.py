@@ -31,6 +31,7 @@ class EventBroker:
         payload: BaseModel | dict[str, Any] | None = None,
         *,
         context_id: str | None = None,
+        org_id: str | None = None,
     ) -> Event:
         self._seq += 1
         if isinstance(payload, BaseModel):
@@ -40,7 +41,8 @@ class EventBroker:
         if context_id is None:
             context_id = data.get("context_id")
         etype = event_type.value if isinstance(event_type, EventType) else str(event_type)
-        evt = Event(event=etype, id=self._seq, ts=utcnow().isoformat(), context_id=context_id, data=data)
+        evt = Event(event=etype, id=self._seq, ts=utcnow().isoformat(), context_id=context_id,
+                    org_id=org_id, data=data)
         self.history.append(evt)
         for q in list(self._subscribers):
             self._offer(q, evt)

@@ -12,8 +12,16 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from random import Random
+from typing import Optional
 
 from atlas.a2a.extensions import COORDINATION_EXT, NEED_TO_KNOW_EXT
+from atlas.org.company import (
+    CANONICAL_COMPANY,
+    CompanyProfile,
+    apply_text,
+    project_map,
+    text_substitutions,
+)
 from atlas.a2a.models import (
     AgentCapabilities,
     AgentCard,
@@ -61,6 +69,8 @@ class OrgSnapshot:
     user_of_agent: dict[str, str]  # agent_id -> user_id
     org_lexicon: frozenset[str]
     ceo_id: str
+    org_id: str = "atlas"   # the organisation this snapshot is — a "private network" in the federation
+    org_name: str = "Atlas"
 
     # convenience accessors -------------------------------------------------
     def head_of(self, dept: Department) -> str:
@@ -108,7 +118,16 @@ def _skills_for(dept: Department, level: Level, rng: Random) -> list[AgentSkill]
     return skills
 
 
-def generate_org(seed: int) -> OrgSnapshot:
+def generate_org(
+    seed: int, *, org_id: str = "atlas", org_name: str = "Atlas", company: "Optional[CompanyProfile]" = None,
+) -> OrgSnapshot:
+    # The company profile makes each federation org a different company — different projects +
+    # people + reskinned secrets. ``None`` ⇒ the canonical (atlas) identity profile, so
+    # ``generate_org(42)`` stays byte-identical (golden snapshot + single-org demo unchanged).
+    company = company or CANONICAL_COMPANY
+    reps = text_substitutions(company)   # canonical → company free-text replacements (identity for atlas)
+    proj_map = project_map(company)      # canonical project id → this company's project id
+    name_off = company.name_offset       # rotate the name pool ⇒ different people (0 for atlas)
     rng = Random(seed)
     # Agent ids are SEP-<16 digits>: opaque/non-sequential, but DETERMINISTIC from the seed
     # (a dedicated RNG so id generation never perturbs skill sampling). Same seed ⇒ same ids.
@@ -137,19 +156,21 @@ def generate_org(seed: int) -> OrgSnapshot:
         nonlocal idx
         aid = _new_agent_id()
         nf, nl = len(FIRST_NAMES), len(LAST_NAMES)
-        # the `+ idx // nf` block offset breaks the period-N collision so all
-        # 100 names are unique (no two agents share a name).
-        first = FIRST_NAMES[idx % nf]
-        last = LAST_NAMES[(idx * 13 + idx // nf) % nl]
+        # the `+ idx // nf` block offset breaks the period-N collision so all 100 names are unique.
+        # ``name_off`` (per company) rotates BOTH pools so each org has DIFFERENT people; a constant
+        # rotation preserves the within-org uniqueness (it's a bijection on the index), and is 0 for
+        # the canonical company ⇒ atlas keeps its exact names.
+        first = FIRST_NAMES[(idx + name_off) % nf]
+        last = LAST_NAMES[(idx * 13 + idx // nf + name_off * 7) % nl]
         profile = OrgProfile(
             agent_id=aid,
             human_name=f"{first} {last}",
-            human_email=f"{first}.{last}@atlas.dev".lower(),
+            human_email=f"{first}.{last}@{org_id}.dev".lower(),
             department=dept,
             role_title=role_title,
             level=level,
             clearance=int(level),
-            goal=goal_for(dept, level, role_title),
+            goal=apply_text(goal_for(dept, level, role_title), reps),
             reports_to=reports_to,
             security_cleared=dept in (Department.SECURITY, Department.EXEC),
         )
@@ -164,8 +185,8 @@ def generate_org(seed: int) -> OrgSnapshot:
         return AgentCard(
             id=profile.agent_id,
             name=profile.human_name,
-            description=f"{profile.role_title}, {profile.department.value.title()} @ {ORG_NAME}",
-            provider=AgentProvider(organization=ORG_NAME, url="https://atlas.dev"),
+            description=f"{profile.role_title}, {profile.department.value.title()} @ {org_name}",
+            provider=AgentProvider(organization=org_name, url=f"https://{org_id}.dev"),
         )
 
     # ── Pass 1: structure (deterministic, no rng) ──────────────────────────
@@ -214,18 +235,19 @@ def generate_org(seed: int) -> OrgSnapshot:
 
         head.profile.teams = [t for t in teams if t.startswith(f"{spec.dept.value}-team-")]
 
-        # projects
-        if spec.projects:
-            for p in spec.projects:
+        # projects — mapped to THIS company's project ids (canonical for atlas)
+        dept_projects = [proj_map[p] for p in spec.projects]
+        if dept_projects:
+            for p in dept_projects:
                 projects.setdefault(p, [])
             ic_proj_counter = 0
             for ag in [head, *dept_managers, *dept_ics]:
                 if ag.profile.level == Level.IC:
-                    p = spec.projects[ic_proj_counter % len(spec.projects)]
+                    p = dept_projects[ic_proj_counter % len(dept_projects)]
                     ic_proj_counter += 1
                     ag.profile.projects = [p]
                 else:
-                    ag.profile.projects = list(spec.projects)
+                    ag.profile.projects = list(dept_projects)
                 for p in ag.profile.projects:
                     projects[p].append(ag.id)
 
@@ -237,16 +259,16 @@ def generate_org(seed: int) -> OrgSnapshot:
         ag.card = AgentCard(
             id=ag.id,
             name=ag.profile.human_name,
-            description=f"{ag.profile.role_title}, {ag.profile.department.value.title()} @ {ORG_NAME}",
-            provider=AgentProvider(organization=ORG_NAME, url="https://atlas.dev"),
-            url=f"https://atlas.dev/.well-known/agents/{ag.id}/agent-card.json",
+            description=f"{ag.profile.role_title}, {ag.profile.department.value.title()} @ {org_name}",
+            provider=AgentProvider(organization=org_name, url=f"https://{org_id}.dev"),
+            url=f"https://{org_id}.dev/.well-known/agents/{ag.id}/agent-card.json",
             preferredTransport="in-process",
-            iconUrl="https://atlas.dev/icon.svg",
-            documentationUrl="https://atlas.dev/docs/a2a",
+            iconUrl=f"https://{org_id}.dev/icon.svg",
+            documentationUrl=f"https://{org_id}.dev/docs/a2a",
             defaultInputModes=["text/plain"],
             defaultOutputModes=["text/plain"],
             skills=skills,
-            interfaces=[AgentInterface(transport="in-process", url=f"atlas://agent/{ag.id}")],
+            interfaces=[AgentInterface(transport="in-process", url=f"{org_id}://agent/{ag.id}")],
             capabilities=AgentCapabilities(
                 streaming=True,
                 pushNotifications=True,  # backed by the webhook delivery subsystem (atlas/push)
@@ -280,22 +302,27 @@ def generate_org(seed: int) -> OrgSnapshot:
         scope_ref: str | None = None
         if tmpl.scope_ref_spec is not None:
             s = tmpl.scope_ref_spec
-            if s[0] in ("project", "role"):
+            if s[0] == "project":
+                scope_ref = proj_map.get(s[1], s[1])  # the company's project id
+            elif s[0] == "role":
                 scope_ref = s[1]
             elif s[0] == "team_of_owner":
                 scope_ref = team_of.get(owner)
 
+        # item_id KEY stays canonical (DB namespaces by org); title/body/summary are reskinned to
+        # this company's projects; topic_tags + sensitivity are LEFT CANONICAL so the Policy Engine
+        # classifies + tiers every org's items identically.
         item_id = f"item-{tmpl.key}"
         item = ContextItem(
             item_id=item_id,
             owner_agent_id=owner,
-            title=tmpl.title,
-            body=tmpl.body,
+            title=apply_text(tmpl.title, reps),
+            body=apply_text(tmpl.body, reps),
             sensitivity=tmpl.sensitivity,
             scope=tmpl.scope,
             scope_ref=scope_ref,
             min_clearance=tmpl.min_clearance,
-            redacted_summary=tmpl.redacted_summary,
+            redacted_summary=apply_text(tmpl.redacted_summary, reps) if tmpl.redacted_summary else tmpl.redacted_summary,
             topic_tags=list(tmpl.topic_tags),
         )
         items[item_id] = item
@@ -337,4 +364,6 @@ def generate_org(seed: int) -> OrgSnapshot:
         user_of_agent=user_of_agent,
         org_lexicon=frozenset(lexicon),
         ceo_id=ceo_id,
+        org_id=org_id,
+        org_name=org_name,
     )

@@ -15,6 +15,7 @@ async function boot() {
     console.error("[atlas] failed to load org", e);
   }
   void useStore.getState().loadNetwork(); // probe the authenticated network (no-op/off if DB disabled)
+  void useStore.getState().loadOrgs(); // discover the federation (≥2 orgs ⇒ the Federation tab appears)
   await useStore.getState().loadHistory(); // replay persisted conversations BEFORE the live stream starts
   connectSSE();
 }

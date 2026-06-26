@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Loader2, Power, Search, ShieldCheck, Database, Plug, Radio } from "lucide-react";
 import { useStore } from "../store";
 import { LEVEL_LABEL, deptColor } from "../theme";
@@ -15,7 +15,16 @@ export function NetworkPanel() {
   const network = useStore((s) => s.network);
   const joinAll = useStore((s) => s.joinAll);
   const disconnectAll = useStore((s) => s.disconnectAll);
+  const selectedOrg = useStore((s) => s.selectedOrg);
+  const loadNetwork = useStore((s) => s.loadNetwork);
   const [q, setQ] = useState("");
+
+  // Always reflect the org IN VIEW: re-fetch membership whenever the tab mounts or the selected
+  // org changes — so returning to this tab after switching orgs never shows the previous org's
+  // online/Join-all state. Passing the org explicitly avoids any stale module-level scope.
+  useEffect(() => {
+    void loadNetwork(selectedOrg ?? undefined);
+  }, [selectedOrg, loadNetwork]);
 
   if (!org) return null;
   const nodes = org.nodes;

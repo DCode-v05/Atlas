@@ -46,6 +46,7 @@ CONSERVATISM: dict[ShareOutcome, int] = {
     ShareOutcome.DENY: 3,
 }
 
+_PUBLIC = SENSITIVITY_RANK[Sensitivity.PUBLIC]
 _CONFIDENTIAL = SENSITIVITY_RANK[Sensitivity.CONFIDENTIAL]
 _RESTRICTED = SENSITIVITY_RANK[Sensitivity.RESTRICTED]
 _DEPT_HEAD = int(Level.DEPT_HEAD)  # clearance 4 — dept head / exec
@@ -110,6 +111,7 @@ class Ctx:
     scoped: bool
     classes: frozenset[str]
     incident: bool
+    cross_org: bool = False  # the requester belongs to a DIFFERENT organisation (federation boundary)
 
     @property
     def sens(self) -> int:
@@ -121,6 +123,20 @@ class Ctx:
 
 
 # ── the rules — each returns (floor_outcome, reason) or None (no effect) ────────
+def _r_cross_org_restrict(c: Ctx):
+    # Federation boundary: BETWEEN organisations, only PUBLIC information may cross — internal /
+    # confidential / restricted / secret data is categorically withheld. Need-to-know is an
+    # INTERNAL concept; a peer org has no standing inside it, so this is a hard DENY (never an
+    # escalation — there is no shared human across a public org boundary). "Only necessary
+    # things leave the building." Tenant/information-flow isolation (NIST 800-53 AC-4 / AC-21).
+    if c.cross_org and c.sens > _PUBLIC:
+        return ShareOutcome.DENY, (
+            "cross-organisation request: only PUBLIC information may cross the org boundary; "
+            "internal/confidential/restricted/secret data stays inside the org (NIST 800-53 AC-4 information-flow enforcement)."
+        )
+    return None
+
+
 def _r_clearance_gate(c: Ctx):
     if c.requester.clearance < c.item.min_clearance:
         return ShareOutcome.DENY, (
@@ -249,6 +265,7 @@ def _r_officer_self_review(c: Ctx):
 
 #: Ordered registry — rule_id → predicate. Order is cosmetic (max() decides).
 RULES: tuple[tuple[str, object], ...] = (
+    ("CROSS-ORG-RESTRICT", _r_cross_org_restrict),
     ("CLEARANCE-GATE", _r_clearance_gate),
     ("NEED-TO-KNOW", _r_need_to_know),
     ("LEAST-PRIV-ESCALATE", _r_least_priv_escalate),

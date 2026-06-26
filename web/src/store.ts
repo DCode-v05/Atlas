@@ -3,6 +3,7 @@ import type {
   AgentNode,
   ChatMessage,
   ContextSharePayload,
+  CrossOrgExchangePayload,
   EventEnvelope,
   FeedItem,
   GateRejectedPayload,
@@ -11,13 +12,14 @@ import type {
   HitlItem,
   LlmStatusPayload,
   MessageSentPayload,
+  OrgSummary,
   OrgView,
   PushDeliveredPayload,
   ThreadCreatedPayload,
   TraceSpanPayload,
 } from "./types";
 import { KNOWN_EVENTS } from "./types";
-import { api } from "./api";
+import { api, setApiOrg } from "./api";
 
 export interface LiveLink {
   id: string;
@@ -53,7 +55,9 @@ export interface NetworkState {
   busy: Record<string, true>; // a join/disconnect is in flight for this agent
 }
 
-type View = "convo" | "history" | "members" | "comms" | "roster" | "projects";
+type View = "convo" | "history" | "members" | "comms" | "roster" | "projects" | "federation";
+
+export type CrossOrgExchange = CrossOrgExchangePayload & { id: number; ts: number };
 
 interface State {
   conn: "connecting" | "live" | "down";
@@ -79,6 +83,11 @@ interface State {
   gate: GateRejectedPayload | null;
   llm: LlmStatusPayload | null;
   network: NetworkState;
+  // federation (multi-org)
+  orgs: OrgSummary[];
+  selectedOrg: string | null; // which org's structure the teams/roster/network/projects show
+  orgViews: Record<string, OrgView>; // every org's structure, for the all-orgs Comms graph
+  exchanges: CrossOrgExchange[]; // live cross-org boundary crossings (newest first)
   // ui
   view: View;
   deptFilter: string | null;
@@ -101,11 +110,14 @@ interface State {
   loadHistory: () => Promise<void>;
   seedHistory: (conversations: HistoryConversation[]) => void;
   clearHistory: () => Promise<void>;
-  loadNetwork: () => Promise<void>;
+  loadNetwork: (orgId?: string) => Promise<void>;
   joinAgent: (id: string) => Promise<void>;
   disconnectAgent: (id: string) => Promise<void>;
   joinAll: (ids: string[]) => Promise<void>;
   disconnectAll: () => Promise<void>;
+  loadOrgs: () => Promise<void>;
+  selectOrg: (orgId: string) => Promise<void>;
+  loadAllOrgViews: () => Promise<void>;
 }
 
 const FEED_CAP = 220;
@@ -137,6 +149,10 @@ export const useStore = create<State>((set, get) => ({
   gate: null,
   llm: null,
   network: { enabled: false, loaded: false, online: {}, busy: {} },
+  orgs: [],
+  selectedOrg: null,
+  orgViews: {},
+  exchanges: [],
   view: "convo",
   deptFilter: null,
   selectedContext: null,
@@ -266,15 +282,18 @@ export const useStore = create<State>((set, get) => ({
     });
   },
 
-  loadNetwork: async () => {
+  // orgId (when given) is fetched explicitly so the result is always for the org in view — never
+  // the previously-selected one. The online map is REPLACED with this org's members (so a peer
+  // org's membership can never linger).
+  loadNetwork: async (orgId?: string) => {
     try {
-      const r = await api.network();
+      const r = await api.network(orgId);
       const online: Record<string, true> = {};
       for (const m of r.members) online[m.agent_id] = true;
-      set((s) => ({ network: { ...s.network, enabled: true, loaded: true, online } }));
+      set((s) => ({ network: { ...s.network, enabled: true, loaded: true, online, busy: {} } }));
     } catch {
       // 503 ⇒ no DB / network auth off; the panel shows an informative "off" state
-      set((s) => ({ network: { ...s.network, enabled: false, loaded: true } }));
+      set((s) => ({ network: { ...s.network, enabled: false, loaded: true, online: {}, busy: {} } }));
     }
   },
   joinAgent: async (id) => {
@@ -303,6 +322,52 @@ export const useStore = create<State>((set, get) => ({
   },
   joinAll: async (ids) => { await runBatched(ids, (id) => get().joinAgent(id)); },
   disconnectAll: async () => { await runBatched(Object.keys(get().network.online), (id) => get().disconnectAgent(id)); },
+
+  // Federation: discover the orgs in this deployment, and switch which org the console shows.
+  loadOrgs: async () => {
+    try {
+      const r = await api.orgs();
+      const primary = r.orgs.find((o) => o.primary) || r.orgs[0];
+      const sel = get().selectedOrg ?? (primary ? primary.org_id : null);
+      if (r.orgs.length > 1 && sel) setApiOrg(sel); // scope org-aware API calls to the selection
+      set({ orgs: r.orgs, selectedOrg: sel });
+      if (r.orgs.length > 1) void get().loadAllOrgViews(); // for the all-orgs Comms graph
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("[atlas] orgs load failed", e);
+    }
+  },
+  selectOrg: async (orgId) => {
+    if (get().selectedOrg === orgId && get().org) return;
+    setApiOrg(orgId); // BEFORE fetching: teams/roster/network/projects/prompt now scope to this org
+    // clear the previous org's membership immediately so its online/Join-all state can't linger
+    set((s) => ({ selectedOrg: orgId, selectedAgent: null, network: { ...s.network, online: {}, busy: {} } }));
+    try {
+      const o = await api.org(orgId); // the sealed org's own structure (disjoint agent ids)
+      get().setOrg(o);
+      void get().loadNetwork(orgId); // refresh membership for the newly-selected org (explicit)
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("[atlas] selectOrg failed", orgId, e);
+    }
+  },
+  // Every org's structure (immutable per seed) — the all-orgs hierarchical Comms graph draws these.
+  loadAllOrgViews: async () => {
+    const ids = get().orgs.map((o) => o.org_id);
+    const views: Record<string, OrgView> = { ...get().orgViews };
+    await Promise.all(
+      ids.map(async (id) => {
+        if (views[id]) return;
+        try {
+          views[id] = await api.org(id); // explicit id ⇒ that specific org, regardless of selection
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.error("[atlas] org view load failed", id, e);
+        }
+      }),
+    );
+    set({ orgViews: views });
+  },
 
   setOrg: (o) => {
     const agents: Record<string, AgentNode> = {};
@@ -541,17 +606,36 @@ export const useStore = create<State>((set, get) => ({
 
       case "network.joined": {
         const net = get().network;
-        set({ network: { ...net, enabled: true, online: { ...net.online, [d.agent_id]: true } } });
+        // apply only to the org currently in view (events are org-tagged; the broker is shared,
+        // so a peer org's joins must not show up in this org's membership)
+        const forThisOrg = !env.org_id || !get().selectedOrg || env.org_id === get().selectedOrg;
+        if (forThisOrg) set({ network: { ...net, enabled: true, online: { ...net.online, [d.agent_id]: true } } });
         pushFeed(`${d.name} joined the network`, "ok");
         break;
       }
 
       case "network.left": {
         const net = get().network;
-        const online = { ...net.online };
-        delete online[d.agent_id];
-        set({ network: { ...net, online } });
+        const forThisOrg = !env.org_id || !get().selectedOrg || env.org_id === get().selectedOrg;
+        if (forThisOrg) {
+          const online = { ...net.online };
+          delete online[d.agent_id];
+          set({ network: { ...net, online } });
+        }
         pushFeed(`${d.name} left the network`, "warn");
+        break;
+      }
+
+      case "federation.exchange": {
+        const x = d as CrossOrgExchangePayload;
+        const ex: CrossOrgExchange = { ...x, id: env.id, ts: now() };
+        set({ exchanges: [ex, ...get().exchanges].slice(0, 60) });
+        pushFeed(
+          x.crossed
+            ? `Cross-org · ${x.target_org_name} → ${x.source_org_name}: "${x.item_title}" (public)`
+            : `Cross-org blocked · ${x.target_org_name} withheld "${x.item_title}" from ${x.source_org_name}`,
+          x.crossed ? "ok" : "danger",
+        );
         break;
       }
 

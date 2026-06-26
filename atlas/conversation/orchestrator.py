@@ -31,6 +31,7 @@ from atlas.conversation.intent import build_request_intent, coordination_intent
 from atlas.conversation.stores import GroupStore, ThreadStore
 from atlas.events import (
     ContextSharePayload,
+    CrossOrgExchangePayload,
     EventBroker,
     EventType,
     MessageSentPayload,
@@ -118,6 +119,7 @@ class Orchestrator:
         self.step_delay = step_delay
         self.cron_max_inflight = cron_max_inflight
         self.network = network  # NetworkService when the authenticated-network mode is live, else None
+        self.federation = None  # FederationGateway when this org is part of a federation, else None
         self.dbwriter = None  # set by build_runtime; durable write-through when persistence is on
         self._pending_auth: dict[str, list[dict]] = {}  # agent_id -> tasks parked auth-required until it joins
         self._cron_active = 0
@@ -205,6 +207,25 @@ class Orchestrator:
         if pool is not None and set(tokenize(prompt)):
             _, member_scored = self.router.route_prompt(prompt, pool_ids=pool)
             if not member_scored or member_scored[0][1] < self.router.gate_floor:
+                # No LOCAL member fits. Auto-fallback: a PEER org in the federation may have joined
+                # members for this topic — route across the boundary, where only PUBLIC information
+                # may cross. (Falls through to the original rejection when no peer fits either.)
+                peer = (
+                    self.federation.route_to_peer(
+                        prompt, exclude_org_id=self.snapshot.org_id, gate_floor=self.router.gate_floor)
+                    if self.federation is not None else None
+                )
+                if peer is not None:
+                    context_id = new_id("ctx-")
+                    task = self.router.new_task(context_id, message=prompt, reference_task_ids=reference_task_ids)
+                    # the requester is the best LOCAL joined member (so the cross-org ask respects
+                    # this org's membership — the peer owner is exempted only for transport)
+                    requester_id = member_scored[0][0] if member_scored else next(iter(pool))
+                    self._spawn(self._run_cross_org_request(prompt, context_id, task, peer[0], requester_id=requester_id),
+                                task_id=task.id)
+                    rep = self.federation.org(peer[0])
+                    return {"rejected": False, "task_id": task.id, "context_id": context_id,
+                            "cross_org": True, "routed_to_org": peer[0], "routed_to_org_name": rep.org_name}
                 msg = ("No agent currently in the network can handle this request — the team it "
                        "needs hasn’t joined the network yet.")
                 self.router.reject(prompt, msg)
@@ -774,6 +795,7 @@ class Orchestrator:
         self, kind: str, ctx: dict, *, context_id: str, sender: str, recipients: list[str], task,
         mode: CoordinationMode = CoordinationMode.INDIVIDUAL, intent: Optional[Intent] = None,
         thread_id: Optional[str] = None, group_id: Optional[str] = None, payload: Optional[str] = None,
+        external_ids: Optional[set[str]] = None,
     ):
         """Think, then author the line with Mistral and send it. Returns the
         Message, or None when the LLM couldn't produce text (the message — and its
@@ -792,10 +814,190 @@ class Orchestrator:
         return self.router.send_message(
             context_id=context_id, sender=sender, recipients=recipients, text=text,
             intent=intent, mode=mode, thread_id=thread_id, group_id=group_id, task=task, thinking=thought,
+            external_ids=external_ids,
         )
 
+    async def decide_cross_org_share(
+        self, requester: OrgAgent, item: ContextItem, intent: Intent, context_id: str = "x-org",
+    ) -> ShareDecision:
+        """Decide a request that arrived from a DIFFERENT organisation (via the federation
+        gateway). This org owns ``item`` and decides about its own data — the owner agent's
+        judgement under this org's Policy Engine — but with the federation boundary in force:
+        ``cross_org=True`` is set HERE and only here, so only PUBLIC information can cross
+        (everything else is denied by the ``CROSS-ORG-RESTRICT`` rule). ``requester`` is the
+        foreign agent's ``OrgAgent`` (read for its profile only; it is not a local member)."""
+        owner = self.registry.get(item.owner_agent_id)
+        return await self._decide_share(requester, owner, item, intent, context_id, cross_org=True)
+
+    # ── auto-fallback: route across the federation when no LOCAL member fits ─────────
+    def _peer_needs(self, peer_org, prompt: str) -> list[ContextItem]:
+        """The peer org's items relevant to the prompt topic (any tier). The boundary then
+        shares only the PUBLIC ones and denies the rest — visibly — so this deliberately does
+        NOT pre-filter by sensitivity. Capped, like the local needs scan."""
+        q = set(tokenize(prompt))
+        scored: list[tuple[ContextItem, float]] = []
+        for item in peer_org.snapshot.items.values():
+            rel = 2.0 * len(q & set(item.topic_tags)) + (1.0 if q & set(tokenize(item.title)) else 0.0)
+            if rel > 0:
+                scored.append((item, rel))
+        scored.sort(key=lambda x: (-x[1], x[0].item_id))
+        return [it for it, _ in scored[:3]]
+
+    def _emit_cross_org(self, context_id: str, requester: OrgAgent, owner: OrgAgent, peer_org,
+                        item: ContextItem, decision: ShareDecision, *, crossed: bool) -> None:
+        """The boundary-crossing record (names both orgs) — what the Federation tab shows. The
+        ``outcome`` reflects the FINAL result (after the operator gate): shared if it crossed,
+        withheld otherwise."""
+        self.broker.emit(
+            EventType.CROSS_ORG_EXCHANGE,
+            CrossOrgExchangePayload(
+                source_org_id=self.snapshot.org_id, source_org_name=self.snapshot.org_name,
+                target_org_id=peer_org.org_id, target_org_name=peer_org.org_name,
+                requester_id=requester.id, requester_name=requester.name,
+                owner_id=owner.id, owner_name=owner.name,
+                item_id=item.item_id, item_title=item.title, sensitivity=item.sensitivity.value,
+                outcome=("share" if crossed else "deny"), rule_id=decision.rule_id or "",
+                reason=decision.reason or "", crossed=crossed,
+            ),
+            context_id=context_id, org_id=peer_org.org_id,
+        )
+
+    async def run_cross_org_prompt(self, prompt: str, target_org_id: str, *, requester_id: Optional[str] = None) -> dict:
+        """Operator-directed cross-org request through the FULL pipeline (the live counterpart of
+        the `/exchange` policy probe): open a Task and run the cross-org scenario — threads,
+        messages, History, and the operator-approval HITL gate. Returns the task to watch."""
+        if self.federation is None or target_org_id == self.snapshot.org_id or target_org_id not in self.federation.org_ids:
+            return {"rejected": True, "reason": "unknown or same-org federation target"}
+        pool = self._pool_ids()
+        if requester_id is None:
+            if pool:
+                best, _ = self.router.route_prompt(prompt, pool_ids=pool)
+                requester_id = best or next(iter(pool))
+            else:
+                requester_id = self.snapshot.ceo_id  # no membership gating ⇒ the org's external face
+        context_id = new_id("ctx-")
+        task = self.router.new_task(context_id, message=prompt)
+        self._spawn(self._run_cross_org_request(prompt, context_id, task, target_org_id, requester_id=requester_id),
+                    task_id=task.id)
+        rep = self.federation.org(target_org_id)
+        return {"rejected": False, "task_id": task.id, "context_id": context_id, "cross_org": True,
+                "routed_to_org": target_org_id, "routed_to_org_name": rep.org_name, "requester_id": requester_id}
+
+    async def _run_cross_org_request(
+        self, prompt: str, context_id: str, task: Task, target_org_id: str, *, requester_id: Optional[str] = None,
+    ) -> None:
+        """A request that crosses the federation boundary, run through the REAL pipeline: the local
+        requester (a joined member) opens a thread to the peer owner; messages go through the Router
+        (so they thread + persist to History); the PEER's machinery decides under the Policy Engine
+        (cross_org=True); and every share that WOULD cross is gated by OPERATOR APPROVAL (HITL) before
+        any information leaves. Only PUBLIC may cross — non-public is hard-denied by policy, no human."""
+        peer_org = self.federation.org(target_org_id)
+        requester = self.registry.get(requester_id or self.snapshot.ceo_id)
+        try:
+            self.broker.emit(
+                EventType.PROMPT_ACCEPTED,
+                PromptAcceptedPayload(
+                    prompt=prompt, task_id=task.id, context_id=context_id,
+                    routed_to=requester.id, routed_to_name=f"{requester.name} → {peer_org.org_name}",
+                ),
+                context_id=context_id, org_id=target_org_id,
+            )
+            if self.dbwriter is not None:
+                self.dbwriter.record("conversation", {
+                    "context_id": context_id, "prompt": prompt, "kind": "user",
+                    "routed_to": requester.id, "routed_to_name": f"{requester.name} → {peer_org.org_name}",
+                    "task_id": task.id})
+            self.metrics.record_hop(context_id, requester.id)
+            self.router.set_status(requester.id, AgentStatus.THINKING)
+            self.router.set_task_state(task, TaskState.WORKING)
+            self._trace(requester.id, "route",
+                        f"no local owner — asking {peer_org.org_name} across the federation",
+                        live=False, context_id=context_id, detail="only PUBLIC information may cross the boundary")
+            for item in self._peer_needs(peer_org, prompt):
+                await self._cross_org_source(requester, peer_org, item, context_id, task)
+            await self._finalize(requester, prompt, context_id, task.id)
+        except Exception as exc:  # pragma: no cover - safety net
+            self.router.set_task_state(task, TaskState.FAILED, message=f"cross-org error: {exc}")
+            import traceback
+
+            traceback.print_exc()
+
+    async def _cross_org_source(
+        self, requester: OrgAgent, peer_org, item: ContextItem, context_id: str, task: Task,
+    ) -> None:
+        """Source ONE peer item across the boundary, through the REAL pipeline: open a thread, ask
+        (Router transport — threads + History persistence), let the PEER decide (Policy Engine,
+        cross_org=True). A policy DENY is withheld with no human; a would-cross share is gated by
+        OPERATOR APPROVAL (HITL) before delivery — information only leaves the building on sign-off."""
+        owner_id = item.owner_agent_id
+        owner = peer_org.registry.get(owner_id)
+        ext = {owner_id}  # the peer owner is exempt from THIS org's membership backstop (gateway-vouched)
+        intent = build_request_intent(requester.profile, item)
+        thread, created = self.threads.get_or_create(context_id, requester.id, owner_id, topic=item.title, task_id=task.id)
+        if created:
+            self.router.announce_thread(thread)
+        self.router.set_status(requester.id, AgentStatus.SPEAKING)
+        await self._pause()
+        names = {"owner": f"{owner.name} · {peer_org.org_name}", "requester": requester.name, "item": item.title}
+        await self._send_say(
+            "request", {**names, "motivation": intent.motivation},
+            context_id=context_id, sender=requester.id, recipients=[owner_id], intent=intent,
+            thread_id=thread.thread_id, task=task, external_ids=ext)
+
+        # the PEER org decides about its OWN data, under its Policy Engine (cross_org=True)
+        decision = await self.federation.request_across(
+            requester=requester, target_org_id=peer_org.org_id, item=item, intent=intent, context_id=context_id)
+
+        if decision.outcome == ShareOutcome.DENY:  # hard DENY (non-public): withheld at the boundary, NO human
+            self.metrics.record_decision(context_id, ShareOutcome.DENY)
+            self._emit_context(EventType.CONTEXT_DENIED, context_id, item, owner, requester, decision)
+            await self._send_say("reply_deny", names, context_id=context_id, sender=owner_id,
+                                 recipients=[requester.id], thread_id=thread.thread_id, task=task, external_ids=ext)
+            self._emit_cross_org(context_id, requester, owner, peer_org, item, decision, crossed=False)
+            return
+
+        # would cross (PUBLIC) → OPERATOR APPROVAL GATE before anything leaves the building (HITL)
+        self.metrics.record_decision(context_id, ShareOutcome.ESCALATE)
+        await self._send_say("escalate", names, context_id=context_id, sender=owner_id,
+                             recipients=[requester.id], thread_id=thread.thread_id, task=task, external_ids=ext)
+        req = HitlRequest(
+            task_id=task.id, context_id=context_id, owner_agent_id=owner_id, requester_agent_id=requester.id,
+            item_id=item.item_id, item_title=item.title, intent=intent, proposed_outcome=ShareOutcome.SHARE,
+            sensitivity=item.sensitivity,
+            reason=(f"Cross-org disclosure {peer_org.org_name} → {self.snapshot.org_name}: only PUBLIC "
+                    f"information may leave, and the operator must approve. {decision.reason}"))
+        self.hitl.create(req)
+        self.router.set_task_state(
+            task, TaskState.INPUT_REQUIRED,
+            message=f"Operator approval needed to release '{item.title}' from {peer_org.org_name} to {self.snapshot.org_name}.")
+        self.router.set_status(requester.id, AgentStatus.WAITING_HITL)
+        resolved = await self.hitl.wait(req.request_id, timeout=self.hitl_timeout)
+        self.router.set_task_state(task, TaskState.WORKING)
+        self.router.set_status(requester.id, AgentStatus.SPEAKING)
+        await self._pause(0.4)
+
+        if resolved.state == "approved":
+            redacted = resolved.decided_outcome == ShareOutcome.REDACT or decision.outcome == ShareOutcome.REDACT
+            body = (item.redacted_summary or f"[redacted: {item.title}]") if redacted else (decision.delivered_body or item.body)
+            requester.remember(LearnedFact(item.item_id, item.title, body, item.sensitivity, redacted, owner_id))
+            self.metrics.record_hop(context_id, owner_id)
+            self.metrics.record_resolution(context_id, ShareOutcome.REDACT if redacted else ShareOutcome.SHARE)
+            self._emit_context(EventType.CONTEXT_REDACTED if redacted else EventType.CONTEXT_SHARED,
+                               context_id, item, owner, requester, decision, summary=body if redacted else None,
+                               rule="HITL-APPROVE")
+            await self._send_say("hitl_share", {**names, "body": body}, context_id=context_id, sender=owner_id,
+                                 recipients=[requester.id], thread_id=thread.thread_id, task=task, payload=body, external_ids=ext)
+            self._emit_cross_org(context_id, requester, owner, peer_org, item, decision, crossed=True)
+        else:
+            self.metrics.record_resolution(context_id, ShareOutcome.DENY)
+            self._emit_context(EventType.CONTEXT_DENIED, context_id, item, owner, requester, decision, rule="HITL-DENY")
+            await self._send_say("hitl_deny", names, context_id=context_id, sender=owner_id,
+                                 recipients=[requester.id], thread_id=thread.thread_id, task=task, external_ids=ext)
+            self._emit_cross_org(context_id, requester, owner, peer_org, item, decision, crossed=False)
+        self.router.set_status(requester.id, AgentStatus.IDLE)
+
     async def _decide_share(self, requester: OrgAgent, owner: OrgAgent, item: ContextItem,
-                            intent: Intent, context_id: str) -> ShareDecision:
+                            intent: Intent, context_id: str, *, cross_org: bool = False) -> ShareDecision:
         """The OWNER agent (Mistral) decides share / redact / deny / escalate for its OWN
         data; the deterministic **Policy Engine** then reviews that decision against codified
         compliance rules and may tighten it (never loosen). If the LLM can't be reached the
@@ -810,7 +1012,7 @@ class Orchestrator:
         officer_id = self._policy_officer_id
         floor = self.policy.review(
             _build_llm_decision(item, ShareOutcome.SHARE, "policy pre-gate"),
-            requester.profile, owner.profile, item, intent, officer_id=officer_id,
+            requester.profile, owner.profile, item, intent, officer_id=officer_id, cross_org=cross_org,
         )
         if floor.outcome in (ShareOutcome.DENY, ShareOutcome.ESCALATE):
             # The policy already determines the outcome — decide outright, no owner LLM call.
@@ -836,7 +1038,7 @@ class Orchestrator:
                             live=True, context_id=context_id, detail=reason)
                 decision = _build_llm_decision(item, outcome, reason)
                 # deterministic compliance review (the Policy Engine — replaces the LLM officer)
-                return self._policy_review(requester, owner, item, intent, decision, context_id)
+                return self._policy_review(requester, owner, item, intent, decision, context_id, cross_org=cross_org)
         # LLM unreachable → hand the call to the human operator (HITL); the engine does not
         # decide for an absent owner, so an undecided share is a person's call, not code's.
         reason = "Owner's LLM was unavailable — escalated to the operator to decide."
@@ -848,7 +1050,7 @@ class Orchestrator:
         )
 
     def _policy_review(self, requester: OrgAgent, owner: OrgAgent, item: ContextItem,
-                       intent: Intent, decision: ShareDecision, context_id: str) -> ShareDecision:
+                       intent: Intent, decision: ShareDecision, context_id: str, *, cross_org: bool = False) -> ShareDecision:
         """Deterministic compliance review (the **Policy Engine**) over the owner's LLM
         decision: codified need-to-know / least-privilege / SoD / regulatory rules, folded
         most-restrictive-wins (tighten-only). Replaces the former LLM Policy Officer. Recorded
@@ -856,7 +1058,7 @@ class Orchestrator:
         head (the compliance authority); a tighten re-stamps the decision `rule_id="POLICY/<rule>"`."""
         officer_id = self._policy_officer_id
         reviewed = self.policy.review(
-            decision, requester.profile, owner.profile, item, intent, officer_id=officer_id
+            decision, requester.profile, owner.profile, item, intent, officer_id=officer_id, cross_org=cross_org
         )
         self.metrics.record_policy_review(context_id)
         attrib = officer_id or owner.id

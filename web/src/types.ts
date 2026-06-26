@@ -22,6 +22,10 @@ export interface EventEnvelope<T = any> {
   id: number;
   ts: string;
   context_id?: string | null;
+  // The organisation an event belongs to (federation). Null in the single-org demo; in a
+  // federation, cross-org exchanges carry the TARGET org. Agent ids are disjoint across orgs,
+  // so the UI also tells orgs apart by which org's graph an agent_id belongs to.
+  org_id?: string | null;
   data: T;
 }
 
@@ -236,7 +240,53 @@ export const KNOWN_EVENTS = new Set<string>([
   "push.delivered",
   "network.joined",
   "network.left",
+  "federation.exchange",
 ]);
+
+// ─── Federation (atlas/events/schema.py CrossOrgExchangePayload + /api/orgs) ──
+export interface CrossOrgExchangePayload {
+  source_org_id: string;
+  source_org_name: string;
+  target_org_id: string;
+  target_org_name: string;
+  requester_id: string;
+  requester_name: string;
+  owner_id: string;
+  owner_name: string;
+  item_id: string;
+  item_title: string;
+  sensitivity: string;
+  outcome: string; // share / redact / deny / escalate
+  rule_id: string;
+  reason: string;
+  crossed: boolean;
+}
+export interface OrgSummary {
+  org_id: string;
+  org_name: string;
+  agents: number;
+  members: number;
+  primary: boolean;
+}
+export interface FederationItem {
+  item_id: string;
+  title: string;
+  sensitivity: string;
+  owner_id: string;
+  owner_name: string;
+}
+export interface CrossOrgExchangeResult {
+  context_id: string;
+  outcome: string;
+  crossed: boolean;
+  rule_id?: string | null;
+  reason?: string | null;
+  delivered_title?: string | null;
+  delivered_body?: string | null;
+  item: { item_id: string; title: string; sensitivity: string };
+  source_org: { org_id: string; org_name: string; requester: string };
+  target_org: { org_id: string; org_name: string; owner: string };
+}
 
 // ─── REST view models (atlas/api/viewmodels.py) ──────────────────────────────
 export interface AgentNode {
@@ -259,6 +309,7 @@ export interface AgentNode {
   owns_total: number;
 }
 export interface OrgView {
+  org_id?: string;
   org_name: string;
   seed: number;
   node_count: number;

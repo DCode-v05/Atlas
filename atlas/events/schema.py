@@ -39,6 +39,7 @@ class EventType(str, Enum):
     PUSH_DELIVERED = "push.delivered"  # an outbound A2A webhook delivery attempt
     NETWORK_JOINED = "network.joined"  # an agent authenticated + joined the network
     NETWORK_LEFT = "network.left"      # an agent's network session ended / was revoked
+    CROSS_ORG_EXCHANGE = "federation.exchange"  # a request crossed the boundary between two orgs
 
 
 #: Stable, ordered list of every event type — mirrored by the frontend.
@@ -53,6 +54,10 @@ class Event(BaseModel):
     id: int
     ts: str
     context_id: Optional[str] = None
+    # The organisation an event belongs to. Optional + null by default, so the single-org
+    # (N=1) wire is byte-unchanged; in a federation the UI uses it (together with the disjoint
+    # agent ids) to tell two companies apart, and cross-org exchanges carry the TARGET org.
+    org_id: Optional[str] = None
     data: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -247,3 +252,24 @@ class NetworkMemberPayload(BaseModel):
     role: str = ""
     session_id: str = ""
     members: int = 0  # current network size
+
+
+class CrossOrgExchangePayload(BaseModel):
+    """A request that crossed the federation boundary between two organisations. Only PUBLIC
+    information may cross; ``outcome``/``crossed`` say whether the target org let it through."""
+
+    source_org_id: str
+    source_org_name: str = ""
+    target_org_id: str
+    target_org_name: str = ""
+    requester_id: str = ""
+    requester_name: str = ""
+    owner_id: str = ""
+    owner_name: str = ""
+    item_id: str = ""
+    item_title: str = ""
+    sensitivity: str = ""
+    outcome: str = ""        # share / redact / deny / escalate (the boundary decision)
+    rule_id: str = ""
+    reason: str = ""
+    crossed: bool = False    # did anything actually cross (share/redact) vs withheld (deny/escalate)

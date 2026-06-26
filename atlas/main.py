@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from atlas.api import router as api_router, v1_router, wellknown_router
 from atlas.a2a.errors import A2AError
 from atlas.config import get_settings
-from atlas.runtime import Runtime, build_runtime
+from atlas.runtime import Federation, Runtime, build_federation
 
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
 
@@ -50,25 +50,44 @@ def _serve_index(request: Request):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # tests inject a pre-built (sqlite + fake-LLM) runtime so the REAL boot path runs offline
-    rt = getattr(app.state, "preset_runtime", None) or build_runtime(get_settings())
+    # Resolve the runtime. Tests inject a single pre-built (sqlite + fake-LLM) runtime via
+    # ``preset_runtime`` (no federation — keeps every existing test on the real boot path),
+    # or a pre-built ``preset_federation``; otherwise the real boot builds the federation
+    # (settings.org_count orgs — N=1 is the historical single-org demo).
+    preset_fed: Optional[Federation] = getattr(app.state, "preset_federation", None)
+    preset_rt: Optional[Runtime] = getattr(app.state, "preset_runtime", None)
+    fed: Optional[Federation] = preset_fed
+    if fed is None and preset_rt is None:
+        fed = build_federation(get_settings())
+    if fed is not None:
+        app.state.federation = fed
+        rt = fed.runtime_for(fed.primary.org_id)  # the primary org, flattened — app.state.runtime
+        org_rts = [fed.runtime_for(oid) for oid in fed.orgs]
+    else:
+        rt = preset_rt
+        org_rts = [rt]
     app.state.runtime = rt
+
+    # Shared, once (broker/db/dbwriter/push are single instances across every org).
     if rt.db is not None:
         from atlas.db import seed_org
 
         await rt.db.create_all()
-        await seed_org(rt.db, rt.snapshot)  # mirror the org into the DB on first boot (idempotent)
-        if rt.network is not None:
-            await rt.network.init()  # load/create the signing key + re-hydrate live sessions
+        for ort in org_rts:  # mirror each org into the DB on first boot (idempotent)
+            await seed_org(rt.db, ort.snapshot)
+            if ort.network is not None:
+                await ort.network.init()  # load/create the org's signing key + re-hydrate sessions
         if rt.dbwriter is not None:
             await rt.dbwriter.start(rt.broker)  # durable write-through worker + telemetry tap
-    await rt.registry.start_heartbeat()
+    for ort in org_rts:  # per-org: each sealed org has its own heartbeat
+        await ort.registry.start_heartbeat()
     await rt.push.start()
     try:
         yield
     finally:
-        await rt.registry.stop_heartbeat()
-        await rt.cron.stop()
+        for ort in org_rts:
+            await ort.registry.stop_heartbeat()
+            await ort.cron.stop()
         await rt.push.stop()
         if rt.dbwriter is not None:
             await rt.dbwriter.stop()
@@ -76,10 +95,12 @@ async def lifespan(app: FastAPI):
             await rt.db.dispose()
 
 
-def create_app(runtime: Optional[Runtime] = None) -> FastAPI:
+def create_app(runtime: Optional[Runtime] = None, federation: Optional[Federation] = None) -> FastAPI:
     app = FastAPI(title="Atlas — A2A Communication Platform", version="0.1.0", lifespan=lifespan)
-    if runtime is not None:
-        app.state.preset_runtime = runtime  # the lifespan uses this instead of building one
+    if federation is not None:
+        app.state.preset_federation = federation  # the lifespan uses this multi-org federation
+    elif runtime is not None:
+        app.state.preset_runtime = runtime  # the lifespan uses this single runtime instead of building one
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

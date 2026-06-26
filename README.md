@@ -12,6 +12,8 @@ The communication itself runs on a faithful, in-process implementation of the [A
 
 I built Atlas during my AI Engineering internship at September AI, as one of several agentic prototypes exploring agent-to-agent coordination and need-to-know governance.
 
+> 📖 **Complete documentation:** [`docs/DOCUMENTATION.md`](docs/DOCUMENTATION.md) — the full reference covering every part of the system (the pipeline, need-to-know, the Policy Engine, HITL, cron, metrics, persistence + the authenticated network, the multi-org federation, the complete API + SSE-events + config reference, and what you can do with it).
+
 ## Key Features
 
 - **A 100-agent company, deterministically generated.** `generate_org(seed)` is a pure function — the same seed produces a byte-identical company. It builds a real hierarchy tree (every non-CEO has a resolvable `reports_to`), sets `clearance == level`, wires teams and three cross-cutting projects (`atlas-core`, `billing`, `mobile`), and seeds ~18 project secrets across every sensitivity tier onto sensible owners.

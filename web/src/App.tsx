@@ -1,4 +1,4 @@
-import { MessagesSquare, Network, LayoutGrid, Boxes, History, Radio } from "lucide-react";
+import { MessagesSquare, Network, LayoutGrid, Boxes, History, Radio, Building2, ChevronDown } from "lucide-react";
 import { TopBar } from "./components/TopBar";
 import { TeamsPanel } from "./components/TeamsPanel";
 import { ConversationTimeline } from "./components/ConversationTimeline";
@@ -23,17 +23,49 @@ const TABS = [
   { id: "projects", label: "Projects", icon: Boxes },
 ] as const;
 
+/** Federation org switcher — replaces the old Federation tab. Picking an org scopes the left
+ *  Teams panel, Network, Roster, Projects, and the top chat-bar dispatch to that sealed org. */
+function OrgSwitcher() {
+  const orgs = useStore((s) => s.orgs);
+  const selectedOrg = useStore((s) => s.selectedOrg);
+  const selectOrg = useStore((s) => s.selectOrg);
+  if (orgs.length < 2) return null;
+  return (
+    <label className="ml-auto flex items-center gap-1.5 mr-1 cursor-pointer" title="Switch organisation (federation)">
+      <Building2 size={13} strokeWidth={2.3} style={{ color: "var(--accent)" }} />
+      <span className="eyebrow">ORG</span>
+      <span className="relative inline-flex items-center">
+        <select
+          value={selectedOrg ?? ""}
+          onChange={(e) => void selectOrg(e.target.value)}
+          className="appearance-none h-7 pl-2 pr-6 rounded-md text-[12px] font-semibold mono bg-transparent border cursor-pointer"
+          style={{ borderColor: "var(--accent)", color: "var(--accent)" }}
+        >
+          {orgs.map((o) => (
+            <option key={o.org_id} value={o.org_id} style={{ color: "#181c22" }}>
+              {o.org_name}{o.primary ? " (primary)" : ""}
+            </option>
+          ))}
+        </select>
+        <ChevronDown size={13} className="absolute right-1.5 pointer-events-none" style={{ color: "var(--accent)" }} />
+      </span>
+    </label>
+  );
+}
+
 function CenterStage() {
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
   const org = useStore((s) => s.org);
+  const multiOrg = useStore((s) => s.orgs.length > 1);
+  const tabs = TABS;
 
   return (
     <section className="panel rounded-lg relative h-full min-h-0 min-w-0 flex flex-col overflow-hidden">
       <Brackets color="var(--accent)" />
       {/* tab strip */}
       <div className="flex items-center gap-1 px-2.5 h-11 shrink-0 border-b" style={{ borderColor: "var(--border)" }}>
-        {TABS.map((t) => {
+        {tabs.map((t) => {
           const Icon = t.icon;
           const active = view === t.id;
           return (
@@ -52,7 +84,11 @@ function CenterStage() {
             </button>
           );
         })}
-        <span className="ml-auto eyebrow pr-1">{view === "convo" ? "live agent-to-agent" : view === "history" ? "completed goals" : view === "members" ? "authenticated membership" : view === "comms" ? "comms topology" : view === "projects" ? "cross-team workspace" : "100 agents"}</span>
+        {multiOrg ? (
+          <OrgSwitcher />
+        ) : (
+          <span className="ml-auto eyebrow pr-1">{view === "convo" ? "live agent-to-agent" : view === "history" ? "completed goals" : view === "members" ? "authenticated membership" : view === "comms" ? "comms topology" : view === "projects" ? "cross-team workspace" : "100 agents"}</span>
+        )}
       </div>
 
       <div className="flex-1 min-h-0 relative">

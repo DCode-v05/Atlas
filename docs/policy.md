@@ -69,6 +69,7 @@ Each rule names the real-world standard it is based on.
 
 | Rule | Makes the outcome at least | Applies when | Based on |
 |---|---|---|---|
+| Cross-organisation boundary | Deny | the request comes from a **different organisation** (federation) and the item is above PUBLIC — only public information may cross the org boundary; everything internal stays inside | NIST 800-53 AC-4 / AC-21 (information-flow / tenant isolation) |
 | Clearance gate | Deny | the requester's clearance is below the item's required level | Bell-LaPadula "no read up"; NIST 800-53 AC-3 |
 | Need-to-know | Redact | the requester is out of scope and the item is confidential or restricted (and it is not an incident) | PCI-DSS Req. 7; NIST 800-53 AC-6 |
 | Least-privilege (escalate) | Escalate | the requester is out of scope and the item is restricted or higher (and they are not an incident responder) | PCI-DSS Req. 7 / AWS IAM — not auto-shared; a human decides the exception |

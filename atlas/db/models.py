@@ -38,6 +38,12 @@ class AgentRow(Base):
 class ContextItemRow(Base):
     __tablename__ = "context_items"
 
+    # Item ids are TEMPLATE-derived (e.g. "item-roadmap-public"), so they are identical across
+    # orgs in a federation — the only seed table whose key is NOT seed-disjoint. The seeder
+    # namespaces the VALUE by org for non-primary orgs (e.g. "globex:item-roadmap-public") so
+    # every org's items coexist in one DB. The key is namespaced in the value (not as a separate
+    # column) deliberately: it keeps this table's schema byte-identical, so an EXISTING persisted
+    # database keeps working without a migration (there is no Alembic — see seed.py).
     item_id = Column(String, primary_key=True)
     owner_agent_id = Column(String, nullable=False)
     title = Column(String, nullable=False)

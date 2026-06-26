@@ -42,8 +42,9 @@ def build_org_view(rt) -> dict:
             }
         )
     return {
-        "org_name": "Atlas",
-        "seed": rt.settings.seed,
+        "org_id": rt.snapshot.org_id,
+        "org_name": rt.snapshot.org_name,
+        "seed": rt.snapshot.seed,
         "node_count": len(nodes),
         "nodes": nodes,
         "reporting_edges": reporting_edges,

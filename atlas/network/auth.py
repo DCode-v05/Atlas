@@ -56,12 +56,17 @@ class NetworkService:
 
     # ── lifecycle ───────────────────────────────────────────────────────────
     async def init(self) -> None:
-        """Load (or create) the network signing keypair and re-hydrate live sessions."""
+        """Load (or create) the network signing keypair and re-hydrate live sessions.
+
+        The key is **per-org** so each sealed org in a federation signs its own JWTs (a token
+        from one org never verifies in another). The canonical single org keeps the historical
+        ``"signing"`` id so existing persisted deployments don't regenerate their key."""
+        key_id = "signing" if self.snapshot.org_id == "atlas" else f"signing:{self.snapshot.org_id}"
         async with self.db.session() as s:
-            row = (await s.execute(select(NetworkKeyRow).where(NetworkKeyRow.id == "signing"))).scalar_one_or_none()
+            row = (await s.execute(select(NetworkKeyRow).where(NetworkKeyRow.id == key_id))).scalar_one_or_none()
             if row is None:
                 priv, pub = generate_keypair()
-                s.add(NetworkKeyRow(id="signing", private_key=priv, public_key=pub))
+                s.add(NetworkKeyRow(id=key_id, private_key=priv, public_key=pub))
                 await s.commit()
                 self._priv_pem, self._pub_pem = priv, pub
             else:
@@ -195,10 +200,13 @@ class NetworkService:
         return True
 
     def _emit(self, etype: EventType, ag, session_id: str) -> None:
+        # Tag the event with this org so a federation UI applies join/left to the right org's
+        # membership view (the broker is shared across orgs; without org_id a peer's joins would
+        # pollute the org you're looking at).
         self.broker.emit(etype, NetworkMemberPayload(
             agent_id=ag.id, name=ag.name, department=ag.profile.department.value,
             role=ag.profile.role_title, session_id=session_id, members=len(self._members),
-        ))
+        ), org_id=self.snapshot.org_id)
 
 
 def b64decode(s: str) -> bytes:
