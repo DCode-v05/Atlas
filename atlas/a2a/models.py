@@ -79,6 +79,7 @@ class AgentExtension(BaseModel):
 class AgentCapabilities(BaseModel):
     streaming: bool = True
     pushNotifications: bool = False
+    extendedAgentCard: bool = False  # an authenticated client can fetch a richer card
     extensions: list[AgentExtension] = Field(default_factory=list)
 
 
@@ -98,6 +99,9 @@ class AgentCard(BaseModel):
     description: str
     provider: AgentProvider
     version: str = "1.0.0"
+    protocolVersion: str = "1.0.0"  # A2A protocol version this card speaks
+    url: str = ""                   # the service URL an external client connects to
+    preferredTransport: str = "in-process"
     capabilities: AgentCapabilities = Field(default_factory=AgentCapabilities)
     skills: list[AgentSkill] = Field(default_factory=list)
     securitySchemes: dict[str, Any] = Field(default_factory=dict)

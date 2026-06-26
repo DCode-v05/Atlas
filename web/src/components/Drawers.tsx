@@ -326,6 +326,8 @@ export function AgentCardDrawer() {
       <div className="p-4">
         {tab === "overview" && (
           <>
+            <A2ACardPanel id={id} />
+
             {(card?.goal ?? node?.goal) && (
               <Section label="Goal · responsibility"><div className="text-[12px] text-ink leading-snug">{card?.goal ?? node?.goal}</div></Section>
             )}
@@ -439,6 +441,81 @@ function TaskAsComposer({ user, accent }: { user: NonNullable<AgentCardView["use
           TASK
         </button>
       </div>
+    </Section>
+  );
+}
+
+/** A2A discovery, shown in the UI: the PUBLIC card (served at the well-known URI,
+ *  no auth) vs the AUTHENTICATED extended card (adds the internal org profile). */
+function A2ACardPanel({ id }: { id: string }) {
+  const [tab, setTab] = useState<"public" | "extended">("public");
+  const [pub, setPub] = useState<any>(null);
+  const [ext, setExt] = useState<any>(null);
+  const [extErr, setExtErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    setPub(null); setExt(null); setExtErr(null);
+    api.publicCard(id).then(setPub).catch(() => {});
+    api.extendedCard(id).then(setExt).catch((e) => setExtErr(String(e?.message ?? e)));
+  }, [id]);
+
+  const caps = pub?.capabilities ?? {};
+  const capList = ["streaming", "pushNotifications", "extendedAgentCard"].filter((k) => caps[k]);
+  const prof = (ext?.extensions ?? []).find((e: any) => String(e.uri).includes("org-profile"))?.metadata;
+
+  const Pill = ({ k, label }: { k: "public" | "extended"; label: string }) => (
+    <button onClick={() => setTab(k)} className="px-2 h-6 rounded text-[10px] font-bold mono transition-colors"
+      style={{ background: tab === k ? (k === "extended" ? "var(--coral)" : "var(--accent)") : "var(--inset)",
+               color: tab === k ? "#fff" : "var(--muted)" }}>{label}</button>
+  );
+
+  return (
+    <Section label="A2A card · discovery">
+      <div className="flex items-center gap-1 mb-2">
+        <Pill k="public" label="🌐 Public" />
+        <Pill k="extended" label="🔒 Extended" />
+        <a href={tab === "public" ? `/.well-known/agents/${id}/agent-card.json` : `/api/agents/${id}/card/extended`}
+           target="_blank" rel="noreferrer" className="ml-auto mono text-[9px] text-faint hover:text-accent">raw json ↗</a>
+      </div>
+
+      {tab === "public" ? (
+        <div className="inset rounded-md p-2.5">
+          <div className="text-[9.5px] text-faint mono mb-1.5">GET /.well-known/agents/{id.slice(0, 10)}…/agent-card.json · no auth</div>
+          {pub ? (
+            <>
+              <Row k="Name" v={pub.name} />
+              <Row k="Skills" v={String(pub.skills?.length ?? 0)} />
+              <Row k="Capabilities" v={capList.join(" · ") || "—"} />
+              <Row k="Security" v={Object.keys(pub.securitySchemes ?? {}).join(", ") || "—"} />
+              <div className="mt-2 flex items-start gap-1.5 text-[10px] rounded px-2 py-1.5" style={{ background: "rgba(209,42,58,0.06)", color: "var(--coral)" }}>
+                <Lock size={11} className="shrink-0 mt-0.5" />
+                <span>Internal org profile (department · level · clearance · reporting line) is <b>withheld</b> from the public card.</span>
+              </div>
+            </>
+          ) : <div className="text-[10.5px] text-faint">loading public card…</div>}
+        </div>
+      ) : (
+        <div className="inset rounded-md p-2.5">
+          <div className="text-[9.5px] text-faint mono mb-1.5">GET /api/agents/{id.slice(0, 10)}…/card/extended · authenticated</div>
+          {prof ? (
+            <>
+              <div className="text-[10px] mb-1.5" style={{ color: "var(--ok)" }}>✓ Authenticated — the extended card reveals the org profile:</div>
+              {[["Department", prof.department], ["Level", `L${prof.level}`], ["Clearance", `L${prof.clearance}`],
+                ["Security cleared", prof.security_cleared ? "yes" : "no"], ["Goal", prof.goal]].map(([k, v]) => (
+                <div key={k} className="flex items-center justify-between text-[11px] py-0.5 px-1.5 rounded my-0.5" style={{ background: "rgba(209,42,58,0.07)" }}>
+                  <span className="text-faint">{k}</span>
+                  <span className="text-ink truncate max-w-[62%] text-right" title={String(v)}>{String(v)}</span>
+                </div>
+              ))}
+            </>
+          ) : extErr ? (
+            <div className="flex items-start gap-1.5 text-[10.5px]" style={{ color: "var(--coral)" }}>
+              <Lock size={12} className="shrink-0 mt-0.5" />
+              <span>Requires authentication (HTTP {extErr}). Set <span className="mono">ATLAS_API_KEY</span> and the console sends it automatically.</span>
+            </div>
+          ) : <div className="text-[10.5px] text-faint">loading extended card…</div>}
+        </div>
+      )}
     </Section>
   );
 }

@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from atlas.api import router as api_router
+from atlas.api import router as api_router, wellknown_router
 from atlas.config import get_settings
 from atlas.runtime import Runtime, build_runtime
 
@@ -108,6 +108,10 @@ def create_app(runtime: Optional[Runtime] = None) -> FastAPI:
         return await call_next(request)
 
     app.include_router(api_router)
+    # Root-level A2A discovery (/.well-known/...). Registered before the SPA
+    # catch-all so it isn't swallowed by the static-file fallback, and outside
+    # /api so the edge-auth middleware leaves public discovery open.
+    app.include_router(wellknown_router)
 
     if WEB_DIST.exists():
         assets = WEB_DIST / "assets"
