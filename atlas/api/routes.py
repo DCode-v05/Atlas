@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from sse_starlette.sse import EventSourceResponse
@@ -116,28 +117,61 @@ def hitl_list(request: Request):
 
 
 @router.get("/tasks")
-def tasks(request: Request):
+def tasks(
+    request: Request,
+    contextId: Optional[str] = None,
+    status: Optional[str] = None,
+    includeArtifacts: bool = False,
+    limit: int = 50,
+    cursor: int = 0,
+):
+    """A2A **ListTasks** — newest-first (timestamp-desc), with ``contextId`` / ``status``
+    filters, cursor pagination (``cursor`` offset + ``limit``), and optional ``includeArtifacts``."""
     rt = _rt(request)
+    items = list(rt.tasks.values())
+    if contextId:
+        items = [t for t in items if t.contextId == contextId]
+    if status:
+        items = [t for t in items if t.status.state.value == status]
+    items.sort(key=lambda t: t.status.timestamp, reverse=True)  # newest first
+    limit = max(1, min(int(limit), 200))
+    cursor = max(0, int(cursor))
+    page = items[cursor:cursor + limit]
+    next_cursor = cursor + limit if cursor + limit < len(items) else None
+
+    def _summary(t):
+        p = t.artifacts[0].parts[0] if t.artifacts and t.artifacts[0].parts else None
+        return getattr(p, "text", None)
+
     return {
+        "total": len(items),
+        "nextCursor": next_cursor,
         "tasks": [
             {
                 "id": t.id,
                 "context_id": t.contextId,
                 "state": t.status.state.value,
-                "summary": (t.artifacts[0].parts[0].text if t.artifacts and t.artifacts[0].parts else None),
+                "timestamp": t.status.timestamp.isoformat(),
+                "summary": _summary(t),
+                **({"artifacts": [a.model_dump(mode="json") for a in t.artifacts]} if includeArtifacts else {}),
             }
-            for t in rt.tasks.values()
-        ]
+            for t in page
+        ],
     }
 
 
 @router.get("/tasks/{task_id}")
-def task_detail(task_id: str, request: Request):
+def task_detail(task_id: str, request: Request, historyLength: Optional[int] = None):
+    """A2A **GetTask** — the full task, optionally truncating ``history`` to the last
+    ``historyLength`` messages (bounded reads for long conversations)."""
     rt = _rt(request)
     t = rt.tasks.get(task_id)
     if t is None:
         raise HTTPException(404, "unknown task")
-    return t.model_dump(mode="json")
+    out = t.model_dump(mode="json")
+    if historyLength is not None and historyLength >= 0:
+        out["history"] = out["history"][-historyLength:] if historyLength else []
+    return out
 
 
 @router.post("/tasks/{task_id}/cancel")
@@ -350,6 +384,7 @@ async def prompt(request: Request, payload: dict = Body(...)):
     human = payload.get("human") or "Operator"
     # Optional: attribute the prompt to a specific human user (1:1 with an agent).
     submitted_by = None
+    acting_agent_id = None
     user_id = payload.get("user_id")
     if user_id:
         u = rt.snapshot.users.get(user_id)
@@ -357,7 +392,10 @@ async def prompt(request: Request, payload: dict = Body(...)):
             raise HTTPException(404, "unknown user")
         human = u.name
         submitted_by = {"user_id": u.user_id, "name": u.name, "agent_id": u.agent_id}
-    result = await rt.orchestrator.run_user_prompt(text, human)
+        acting_agent_id = u.agent_id  # the agent the user operates — the A2A "caller" identity
+    result = await rt.orchestrator.run_user_prompt(
+        text, human, reference_task_ids=payload.get("reference_task_ids") or [], acting_agent_id=acting_agent_id
+    )
     if submitted_by:
         result["submitted_by"] = submitted_by
     return result

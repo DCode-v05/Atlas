@@ -120,9 +120,15 @@ class Router:
         state: TaskState = TaskState.SUBMITTED,
         message: Optional[str] = None,
         role: str = "user",
+        reference_task_ids: Optional[list[str]] = None,
     ) -> Task:
-        m = Message.text_message(role, message, contextId=context_id) if message else None  # type: ignore[arg-type]
-        task = Task(contextId=context_id, status=TaskStatus(state=state, message=m))
+        m = (
+            Message.text_message(role, message, contextId=context_id, referenceTaskIds=reference_task_ids or [])
+            if message else None
+        )  # type: ignore[arg-type]
+        # the opening message is the task's first history entry (so referenceTaskIds + the prompt
+        # persist on the task even as status.message advances with each state change)
+        task = Task(contextId=context_id, status=TaskStatus(state=state, message=m), history=[m] if m else [])
         self.tasks[task.id] = task
         self._emit_task(task)
         if self.dbwriter is not None:

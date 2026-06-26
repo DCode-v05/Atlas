@@ -14,7 +14,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from atlas.api import router as api_router, wellknown_router
+from atlas.api import router as api_router, v1_router, wellknown_router
+from atlas.a2a.errors import A2AError
 from atlas.config import get_settings
 from atlas.runtime import Runtime, build_runtime
 
@@ -92,7 +93,8 @@ def create_app(runtime: Optional[Runtime] = None) -> FastAPI:
         # Opt-in edge auth: only when ATLAS_API_KEY is set. The static UI and
         # /api/healthz stay open; every other /api/* request must present the key.
         path = request.url.path
-        if request.method != "OPTIONS" and path.startswith("/api/") and path != "/api/healthz":
+        gated = path.startswith("/api/") or path.startswith("/v1/")  # /v1 binding inherits edge auth
+        if request.method != "OPTIONS" and gated and path != "/api/healthz":
             rt = getattr(request.app.state, "runtime", None)
             key = rt.settings.api_key if rt is not None else get_settings().api_key
             if key:
@@ -107,7 +109,13 @@ def create_app(runtime: Optional[Runtime] = None) -> FastAPI:
                     return JSONResponse({"error": "forbidden"}, status_code=403)
         return await call_next(request)
 
+    # A2A named errors → an HTTP status + a spec-shaped error body (no JSON-RPC envelope).
+    @app.exception_handler(A2AError)
+    async def _a2a_error(request: Request, exc: A2AError):  # noqa: ANN202
+        return JSONResponse(status_code=exc.http_status, content=exc.to_body())
+
     app.include_router(api_router)
+    app.include_router(v1_router)  # the spec-shaped A2A HTTP+JSON binding
     # Root-level A2A discovery (/.well-known/...). Registered before the SPA
     # catch-all so it isn't swallowed by the static-file fallback, and outside
     # /api so the edge-auth middleware leaves public discovery open.

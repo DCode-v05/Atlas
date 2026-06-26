@@ -49,10 +49,23 @@ class DataPart(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class FileWithUri(BaseModel):
+    """A2A v1.0.0 ``FileWithUri`` — a file referenced by URI (not inline bytes)."""
+
+    uri: str
+    mimeType: Optional[str] = None
+    name: Optional[str] = None
+
+
 class FilePart(BaseModel):
     kind: Literal["file"] = "file"
     file: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @classmethod
+    def from_uri(cls, uri: str, *, mimeType: Optional[str] = None, name: Optional[str] = None) -> "FilePart":
+        """A spec-shaped file part referencing a file by URI (the URL-only variant)."""
+        return cls(file=FileWithUri(uri=uri, mimeType=mimeType, name=name).model_dump(exclude_none=True))
 
 
 Part = Annotated[Union[TextPart, DataPart, FilePart], Field(discriminator="kind")]
@@ -71,9 +84,10 @@ class AgentSkill(BaseModel):
 
 class AgentExtension(BaseModel):
     uri: str
-    version: str = "1"
+    description: Optional[str] = None  # spec: human-readable purpose of the extension
     required: bool = False
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    params: dict[str, Any] = Field(default_factory=dict)  # spec: extension config / payload
+    version: str = "1"  # non-spec convenience (the version is also encoded in the URI)
 
 
 class AgentCapabilities(BaseModel):
@@ -102,17 +116,20 @@ class AgentCard(BaseModel):
     protocolVersion: str = "1.0.0"  # A2A protocol version this card speaks
     url: str = ""                   # the service URL an external client connects to
     preferredTransport: str = "in-process"
+    iconUrl: Optional[str] = None
+    documentationUrl: Optional[str] = None
+    defaultInputModes: list[str] = Field(default_factory=lambda: ["text/plain"])
+    defaultOutputModes: list[str] = Field(default_factory=lambda: ["text/plain"])
     capabilities: AgentCapabilities = Field(default_factory=AgentCapabilities)
     skills: list[AgentSkill] = Field(default_factory=list)
     securitySchemes: dict[str, Any] = Field(default_factory=dict)
     securityRequirements: list[dict[str, Any]] = Field(default_factory=list)
     interfaces: list[AgentInterface] = Field(default_factory=list)
-    extensions: list[AgentExtension] = Field(default_factory=list)
     signature: Optional[str] = None
 
     def extension(self, uri: str) -> Optional[AgentExtension]:
-        """Return the declared extension with ``uri``, if any."""
-        for ext in self.extensions:
+        """Return the declared extension with ``uri`` — spec-located under ``capabilities.extensions``."""
+        for ext in self.capabilities.extensions:
             if ext.uri == uri:
                 return ext
         return None

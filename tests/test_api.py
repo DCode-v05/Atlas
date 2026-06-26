@@ -78,19 +78,22 @@ async def test_public_card_hides_org_profile_but_extended_reveals_it(client):
     c, _ = client
     aid = (await c.get("/api/org")).json()["nodes"][0]["id"]
 
-    # PUBLIC card (well-known, no auth) — internal org profile is withheld.
+    # PUBLIC card (well-known, no auth) — extensions live under capabilities.extensions (spec-valid);
+    # the internal org profile is withheld.
     pub = (await c.get(f"/.well-known/agents/{aid}/agent-card.json")).json()
-    pub_uris = {e["uri"] for e in pub["extensions"]}
+    assert "extensions" not in pub  # no non-spec top-level array
+    pub_uris = {e["uri"] for e in pub["capabilities"]["extensions"]}
     assert _ORG_PROFILE_EXT not in pub_uris
     assert pub["capabilities"]["extendedAgentCard"] is True  # advertises the richer card
     assert (await c.get("/.well-known/agents/NOPE/agent-card.json")).status_code == 404
 
-    # EXTENDED card (authenticated) — the full org profile is present.
+    # EXTENDED card (authenticated) — the full org profile is present, payload in the spec `params`.
     ext = (await c.get(f"/api/agents/{aid}/card/extended")).json()
-    ext_uris = {e["uri"] for e in ext["extensions"]}
+    exts = ext["capabilities"]["extensions"]
+    ext_uris = {e["uri"] for e in exts}
     assert _ORG_PROFILE_EXT in ext_uris
-    prof = next(e for e in ext["extensions"] if e["uri"] == _ORG_PROFILE_EXT)
-    assert prof["metadata"]["clearance"] >= 1  # real internal detail
+    prof = next(e for e in exts if e["uri"] == _ORG_PROFILE_EXT)
+    assert prof["params"]["clearance"] >= 1  # real internal detail
     assert (await c.get("/api/agents/NOPE/card/extended")).status_code == 404
 
 

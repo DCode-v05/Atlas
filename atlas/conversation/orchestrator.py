@@ -23,7 +23,7 @@ import asyncio
 from typing import Optional
 
 from atlas.a2a.ids import new_id
-from atlas.a2a.models import TERMINAL_STATES, Artifact, Task, TaskState, TextPart
+from atlas.a2a.models import TERMINAL_STATES, Artifact, DataPart, FilePart, Task, TaskState, TextPart
 from atlas.bus.discovery import tokenize
 from atlas.bus.registry import AgentRegistry
 from atlas.bus.router import GATE_REASON, Router
@@ -119,6 +119,7 @@ class Orchestrator:
         self.cron_max_inflight = cron_max_inflight
         self.network = network  # NetworkService when the authenticated-network mode is live, else None
         self.dbwriter = None  # set by build_runtime; durable write-through when persistence is on
+        self._pending_auth: dict[str, list[dict]] = {}  # agent_id -> tasks parked auth-required until it joins
         self._cron_active = 0
         self._bg: set[asyncio.Task] = set()
         self._scenarios: dict[str, asyncio.Task] = {}  # task_id -> running scenario (for cancel)
@@ -153,7 +154,10 @@ class Orchestrator:
             f"company context — people, teams, projects, products, data, and operations."
         )
 
-    async def run_user_prompt(self, prompt: str, human_name: str = "Operator") -> dict:
+    async def run_user_prompt(
+        self, prompt: str, human_name: str = "Operator", reference_task_ids: Optional[list[str]] = None,
+        acting_agent_id: Optional[str] = None,
+    ) -> dict:
         """Gate + route (LLM re-rank when available), then run the scenario async."""
         ok, reason = self.router.org_scope_gate(prompt)
         # Authoritative LLM semantic gate: Mistral judges company-relevance on
@@ -180,24 +184,48 @@ class Orchestrator:
             self.router.reject(prompt, msg)
             return {"rejected": True, "reason": msg}
 
-        def _fallback_agent() -> str:
-            return self.snapshot.ceo_id if (pool is None or self.snapshot.ceo_id in pool) else next(iter(pool))
+        # auth-required: when the prompt is issued AS a specific agent that has NOT joined the
+        # network, the CALLER must authenticate first — park the task `auth-required`; it resumes
+        # the moment that agent joins (resume_pending_auth, wired to the network-join hook).
+        if acting_agent_id and self._gating() and not self.network.is_member(acting_agent_id):
+            context_id = new_id("ctx-")
+            task = self.router.new_task(context_id, message=prompt, reference_task_ids=reference_task_ids)
+            actor = self.registry.get(acting_agent_id).name if acting_agent_id in self.registry.agents else acting_agent_id
+            self.router.set_task_state(
+                task, TaskState.AUTH_REQUIRED, message=f"{actor} must authenticate to the network before this task can run.")
+            self._pending_auth.setdefault(acting_agent_id, []).append(
+                {"task_id": task.id, "context_id": context_id, "prompt": prompt, "human": human_name})
+            return {"rejected": False, "auth_required": True, "task_id": task.id, "context_id": context_id,
+                    "state": "auth-required", "acting_agent": acting_agent_id}
 
-        # Routing is LLM-decided: Mistral reads the directory (restricted to network
-        # members when gating is on) and picks the best-fit owner. A bare greeting has no
-        # routable tokens; the deterministic scorer is the fallback when the LLM is down.
-        greeting = not set(tokenize(prompt))
         # Network-scope gate: when membership gating is on, the prompt must be answerable by an
         # agent that is actually IN the network. If the relevant team hasn't joined, no member is
         # a plausible owner, so it's out of scope for the CURRENT network — reject rather than
         # force it onto an unrelated member. (Skipped when gating is off: the whole org is available.)
-        if pool is not None and not greeting:
+        if pool is not None and set(tokenize(prompt)):
             _, member_scored = self.router.route_prompt(prompt, pool_ids=pool)
             if not member_scored or member_scored[0][1] < self.router.gate_floor:
                 msg = ("No agent currently in the network can handle this request — the team it "
                        "needs hasn’t joined the network yet.")
                 self.router.reject(prompt, msg)
                 return {"rejected": True, "reason": msg}
+
+        context_id = new_id("ctx-")
+        task = self.router.new_task(context_id, message=prompt, reference_task_ids=reference_task_ids)
+        return await self._accept_and_run(prompt, context_id, task, pool, human_name, gate_live=gate_live)
+
+    async def _accept_and_run(
+        self, prompt: str, context_id: str, task: Task, pool, human_name: str, *, gate_live: bool = False
+    ) -> dict:
+        """Route within ``pool``, announce the task (prompt.accepted + conversation header), and
+        spawn the scenario/greeting on the given context/task. Shared by a fresh prompt and an
+        auth-required resume (see ``_resume_auth``)."""
+        def _fallback_agent() -> str:
+            return self.snapshot.ceo_id if (pool is None or self.snapshot.ceo_id in pool) else next(iter(pool))
+
+        # Routing is LLM-decided: Mistral reads the directory (restricted to network members when
+        # gating is on); the deterministic scorer is the fallback when the LLM is down.
+        greeting = not set(tokenize(prompt))
         route_live = False
         if greeting:
             chosen = _fallback_agent()
@@ -218,8 +246,6 @@ class Orchestrator:
                 chosen = _fallback_agent()
         scored = [(chosen, 1.0)]
 
-        context_id = new_id("ctx-")
-        task = self.router.new_task(context_id, message=prompt)
         agent = self.registry.get(chosen)
         self._trace(USER_NODE, "judge_scope", f'admitted — “{_clip(prompt)}”', live=gate_live, context_id=context_id)
         self._trace(chosen, "route", f'routed here — “{_clip(prompt)}”', live=route_live, context_id=context_id,
@@ -250,6 +276,18 @@ class Orchestrator:
             "routed_to": chosen, "routed_to_name": agent.name,
             "routed_to_role": agent.profile.role_title,
         }
+
+    def resume_pending_auth(self, agent_id: str) -> None:
+        """Network-join hook: resume every task parked ``auth-required`` on this agent joining."""
+        for p in self._pending_auth.pop(agent_id, []):
+            self._spawn(self._resume_auth(p))
+
+    async def _resume_auth(self, p: dict) -> None:
+        task = self.router.tasks.get(p["task_id"])
+        if task is None or task.status.state != TaskState.AUTH_REQUIRED:
+            return  # canceled / already resumed
+        self.router.set_task_state(task, TaskState.WORKING, message="Authenticated — resuming.")
+        await self._accept_and_run(p["prompt"], p["context_id"], task, self._pool_ids(), p["human"])
 
     def run_cron_task(self, initiator_id: str, prompt: str, *, label: Optional[str] = None) -> Optional[str]:
         """Autonomous goal initiated by an agent (cron simulation). Load-sheds when
@@ -343,7 +381,19 @@ class Orchestrator:
                 ),
                 context_id=context_id,
             )
-            task.artifacts.append(Artifact(name="summary", parts=[TextPart(text=summary)]))
+            task.artifacts.append(Artifact(
+                name="summary",
+                parts=[
+                    TextPart(text=summary),
+                    # a structured, machine-readable outcome record — a real DataPart on a live path
+                    DataPart(data={"owner": agent.id, "prompt": prompt, "metrics": m.model_dump(mode="json")}),
+                    # a URL reference to the owner's A2A card (the URL-only FilePart variant)
+                    FilePart.from_uri(
+                        agent.card.url or f"atlas://agent/{agent.id}",
+                        mimeType="application/json", name=f"{agent.id}-agent-card.json",
+                    ),
+                ],
+            ))
         self.router.set_task_state(task, TaskState.COMPLETED, message=summary)
         self.router.set_status(agent.id, AgentStatus.IDLE)
         self.metrics.emit(context_id)

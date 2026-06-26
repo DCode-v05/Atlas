@@ -270,11 +270,13 @@ class Metrics(BaseModel):
 
 
 def profile_to_extension(profile: OrgProfile) -> AgentExtension:
-    """Wrap an :class:`OrgProfile` as the card's org-profile extension."""
+    """Wrap an :class:`OrgProfile` as the card's org-profile extension (payload in the
+    spec ``params`` field)."""
     return AgentExtension(
         uri=ORG_PROFILE_EXT,
         version="1",
-        metadata=profile.model_dump(mode="json"),
+        description="Agent identity in the org: department, role, level, clearance, reporting line, goal.",
+        params=profile.model_dump(mode="json"),
     )
 
 
@@ -283,4 +285,4 @@ def org_profile_of(card: AgentCard) -> OrgProfile:
     ext = card.extension(ORG_PROFILE_EXT)
     if ext is None:
         raise ValueError(f"card {card.id} has no org-profile extension")
-    return OrgProfile(**ext.metadata)
+    return OrgProfile(**(ext.params or ext.metadata))

@@ -104,6 +104,8 @@ def build_runtime(
         network=network,
     )
     orchestrator.dbwriter = dbwriter
+    if network is not None:
+        network.on_join = orchestrator.resume_pending_auth  # resume auth-required tasks when an agent joins
     cron = CronSimulator(
         orchestrator=orchestrator, registry=registry, snapshot=snapshot, broker=broker, settings=settings
     )

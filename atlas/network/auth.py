@@ -52,6 +52,7 @@ class NetworkService:
         self._pub_pem: Optional[str] = None
         self._members: dict[str, dict] = {}  # agent_id -> {session_id, scope, expires_at}
         self.active = False  # set True by init(); gating stays OFF until the network is live
+        self.on_join = None  # set by build_runtime: Callable[[str], None] fired when an agent joins
 
     # ── lifecycle ───────────────────────────────────────────────────────────
     async def init(self) -> None:
@@ -158,6 +159,8 @@ class NetworkService:
         )
         self._members[agent_id] = {"session_id": session_id, "scope": scope, "expires_at": _iso(exp)}
         self._emit(EventType.NETWORK_JOINED, ag, session_id)
+        if self.on_join is not None:  # resume any tasks parked auth-required on this agent
+            self.on_join(agent_id)
         return {"token": token, "token_type": "Bearer", "agent_id": agent_id,
                 "session_id": session_id, "expires_at": _iso(exp), "scope": scope}
 

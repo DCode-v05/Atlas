@@ -60,26 +60,29 @@ the reliable reference.
 
 | Section | Implemented | Partial | Not implemented | By design |
 |---|--:|--:|--:|--:|
-| 1. Agent Card and discovery | 8 | 6 | 8 | 0 |
-| 2. Core data objects | 15 | 6 | 1 | 0 |
-| 3. RPC methods | 2 | 3 | 4 | 0 |
-| 4. Transports | 0 | 1 | 4 | 2 |
-| 5. Streaming | 2 | 1 | 5 | 0 |
+| 1. Agent Card and discovery | 14 | 2 | 1 | 0 |
+| 2. Core data objects | 21 | 0 | 0 | 0 |
+| 3. RPC methods | 7 | 1 | 1 | 0 |
+| 4. Transports | 1 | 0 | 3 | 2 |
+| 5. Streaming | 6 | 0 | 1 | 0 |
 | 6. Push notifications | 4 | 0 | 1 | 0 |
 | 7. Authentication and security | 4 | 1 | 0 | 0 |
-| 8. Extensions mechanism | 4 | 2 | 2 | 0 |
-| 9. Error handling | 0 | 1 | 2 | 1 |
-| Total | 39 | 21 | 27 | 3 |
+| 8. Extensions mechanism | 7 | 0 | 0 | 0 |
+| 9. Error handling | 3 | 0 | 0 | 1 |
+| Total | 67 | 4 | 7 | 3 |
 
 In one sentence: audited against **A2A v1.0.0**, Atlas faithfully reproduces the A2A object model and core
 behaviour in-process — agent cards, messages, parts, tasks, the full set of task states, the task lifecycle, the
 send-message path, and the extensions mechanism (versioned through the URI) — and now also implements
-**push notifications** (webhook config objects + `pushNotificationConfig/*` CRUD + live delivery) and **edge
-authentication** (opt-in API-key with 401/403, plus `securitySchemes`/`securityRequirements` on the card) at its
-external edge; but it does not put A2A on a network wire, and several surfaces have **drifted** because v1.0.0
-re-grounded the spec on a proto data model (the `Part` union was flattened, the JSON-RPC methods were renamed,
-List Tasks and Subscribe to Task became core operations, and a handful of card fields were renamed or dropped).
-The remaining absent pieces are the on-the-wire transport features (gRPC, the standard REST binding,
-well-known-URL discovery, A2A streaming, and the named error types); three further items (a JSON-RPC envelope
-between agents, multi-transport equivalence, and JSON-RPC error objects) are intentional non-goals of running
-everything in one process.
+**push notifications** (webhook config objects + `pushNotificationConfig/*` CRUD + live delivery), **edge
+authentication** (opt-in API-key with 401/403, plus `securitySchemes`/`securityRequirements` on the card),
+**A2A discovery** (the public card at `/.well-known/agent-card.json` + an agent catalog + authenticated
+**extended** cards), **task cancellation** (`tasks/cancel` → `canceled`), **per-task streaming** (`SubscribeToTask`
+with ordered `StreamResponse` frames and a final-flag terminal close), a spec-shaped **HTTP+JSON binding** (`/v1`
+colon-verb paths with version + extension negotiation), the full **task lifecycle** (incl. `rejected` and a
+park-and-resume `auth-required`), **GetTask** / **ListTasks** (history truncation, filters, pagination),
+**DataPart** / **FilePart** / `referenceTaskIds` in task artifacts, and the **named A2A error model** at its
+external edge; but it does not put A2A on a network wire. The remaining absent pieces are the on-the-wire
+transport features (gRPC, transport negotiation, `tenant` routing) and the *initial-send* streaming method
+`SendStreamingMessage`; three further items (a JSON-RPC envelope between agents, multi-transport equivalence,
+and JSON-RPC error objects) are intentional non-goals of running everything in one process.

@@ -533,7 +533,7 @@ function A2ACardPanel({ id }: { id: string }) {
 
   const caps = pub?.capabilities ?? {};
   const capList = ["streaming", "pushNotifications", "extendedAgentCard"].filter((k) => caps[k]);
-  const prof = (ext?.extensions ?? []).find((e: any) => String(e.uri).includes("org-profile"))?.metadata;
+  const prof = (ext?.capabilities?.extensions ?? []).find((e: any) => String(e.uri).includes("org-profile"))?.params;
 
   const Pill = ({ k, label }: { k: "public" | "extended"; label: string }) => (
     <button onClick={() => setTab(k)} className="px-2 h-6 rounded text-[10px] font-bold mono transition-colors"

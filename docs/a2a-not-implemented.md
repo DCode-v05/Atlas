@@ -14,29 +14,22 @@ justify building it.
 
 | Feature                                        | Status          | What's missing                                                                    | What it would unlock if built                                                                                                                              |
 | ---------------------------------------------- | --------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `capabilities.extendedAgentCard`             | Not implemented | The v1.0.0 capability flag and the authenticated extended-card flow.              | An authenticated client could fetch a richer card (e.g. more skills or detail) than the public one — tiered disclosure once cards are exposed externally. |
 | `capabilities.stateTransitionHistory`        | Not implemented | Nothing — this 0.x flag was**removed** in v1.0.0.                          | Nothing to build: it is no longer a spec feature. Listed only so the removal is on record.                                                                 |
-| `protocolVersion`                            | Not implemented | No protocol version on interfaces.                                                | Per-interface version declaration enables version negotiation — serving 0.3 and 1.0 clients side by side.                                                 |
-| `url` / `preferredTransport`               | Not implemented | No service URL or transport preference (in-process, no address).                  | A real address + preference ordering is what an external client needs to actually connect — a prerequisite for any on-the-wire transport.                 |
-| `iconUrl`, `documentationUrl`              | Not implemented | The two optional presentation fields.                                             | Richer cards in catalogs/registries (icon + docs link) — cosmetic, but it helps human discovery.                                                          |
-| `defaultInputModes` / `defaultOutputModes` | Not implemented | No declared media types (messages are text-only).                                 | Declaring modes lets clients negotiate content types (e.g. accept`image/png`) — the basis for multimodal exchange.                                      |
-| Discovery at`/.well-known/agent-card.json`   | Not implemented | No well-known route; cards live at the non-standard`GET /api/agents/{id}/card`. | Standard discoverability — any A2A client could find an Atlas agent by domain, the entry point to the whole ecosystem.                                    |
-| `GetExtendedAgentCard` (method)              | Not implemented | No authentication and no extended-card operation.                                 | The operation that serves an authenticated, tiered card (pairs with`capabilities.extendedAgentCard`).                                                    |
+
+> Now implemented (moved to [Implemented](./a2a-implemented.md) §1): `capabilities.extendedAgentCard`, `GetExtendedAgentCard`, `protocolVersion`, `url` / `preferredTransport`, discovery at `/.well-known/agent-card.json`, and `iconUrl` / `documentationUrl` / `defaultInputModes` / `defaultOutputModes`.
 
 ## 2. Core data objects
 
-| Feature                        | Status          | What's missing                                 | What it would unlock if built                                                                                       |
-| ------------------------------ | --------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `historyLength` on task read | Not implemented | Task reads return the whole task, untruncated. | Bounded reads (last N messages) for long conversations — cheaper payloads and the ability to page through history. |
+`historyLength` on task read is now **implemented** (moved to [Implemented](./a2a-implemented.md) §3) — `GetTask`
+truncates `history` to the last N messages. Nothing in this section remains absent.
 
 ## 3. RPC methods
 
 | Feature                                                            | Status          | What's missing                                                    | What it would unlock if built                                                                                                                          |
 | ------------------------------------------------------------------ | --------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Send Streaming Message (`SendStreamingMessage`)                  | Not implemented | No streamed task/status events to a client.                       | Real-time A2A streaming so an external client watches a task unfold — the agent-to-agent analogue of the browser SSE.                                 |
-| Cancel Task (`CancelTask`)                                       | Not implemented | No cancel path (the`canceled` state is never reached).          | Aborting in-flight work — a long exchange or a runaway cron goal — giving operators real control.                                                    |
-| Subscribe to Task (`SubscribeToTask`)                            | Not implemented | No task-subscription stream; a client can't (re)attach to a task. | Multiple/reconnecting subscribers to one task (several operators watching the same incident), each getting a current-state snapshot at subscribe time. |
-| Get Extended Agent Card (`GetExtendedAgentCard`)                 | Not implemented | The method (and the auth it needs).                               | Serving an authenticated, richer card to trusted callers (the method behind the §1 capability).                                                       |
+| Send Streaming Message (`SendStreamingMessage`)                  | Not implemented | No streamed task/status events to a client (Atlas streams an *existing* task via `SubscribeToTask`, but not a brand-new send). | Real-time A2A streaming on the initial send so an external client watches a task unfold from the first message — the agent-to-agent analogue of the browser SSE. |
+
+> Now implemented (moved to [Implemented](./a2a-implemented.md) §3): Cancel Task (`tasks/cancel`), Subscribe to Task (`SubscribeToTask`), Get Extended Agent Card (`GetExtendedAgentCard`).
 
 ## 4. Transports
 
@@ -45,19 +38,18 @@ justify building it.
 | gRPC binding                                            | Not implemented | No gRPC service (v1.0.0 defines a full`A2AService`).                | A high-performance binary transport for agents that prefer gRPC — one of the three spec bindings.                                                               |
 | Transport negotiation                                   | Not implemented | Interfaces only declare`in-process`; no negotiation.                | Clients picking among multiple transports an agent offers — a prerequisite is having more than one real transport.                                              |
 | `tenant` routing identifier                           | Not implemented | No`tenant` field on requests or interfaces.                         | Serving many agents behind one endpoint and routing by tenant — relevant only if Atlas ever fronts agents over a shared external endpoint.                      |
-| `A2A-Version` / `A2A-Extensions` service parameters | Not implemented | No per-request version or extension negotiation.                      | Clients declaring a protocol version and opting into extensions per request — needed for safe cross-version interop and required-extension handling.            |
 | JSON-RPC 2.0 envelope between agents                    | By design       | Agents dispatch via Python in one process, not JSON-RPC over sockets. | Putting agents on real sockets. Deliberately avoided to keep 100 agents coherent in one process — only worth it if Atlas ever federates across processes/hosts. |
 | Multi-transport equivalence                             | By design       | Only the in-process transport exists.                                 | Guaranteeing identical behaviour across transports — moot until there is more than one transport; a non-goal by construction.                                   |
+
+> Now implemented (moved to [Implemented](./a2a-implemented.md) §4/§8/§9): the `A2A-Version` / `A2A-Extensions` **service parameters** — per-request version + extension negotiation on the `/v1` binding.
 
 ## 5. Streaming
 
 | Feature                                                        | Status          | What's missing                                                                                                | What it would unlock if built                                                                                       |
 | -------------------------------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| A2A streaming (`SendStreamingMessage` / `SubscribeToTask`) | Not implemented | No A2A streaming methods; a client cannot stream a task.                                                      | External clients streaming tasks — the agent-to-agent counterpart of the UI's SSE.                                 |
-| `StreamResponse` wrapper                                     | Not implemented | Atlas emits its own event schema, not the`StreamResponse` oneof (task/message/statusUpdate/artifactUpdate). | A spec-shaped stream/webhook payload so A2A clients parse Atlas streams with standard tooling.                      |
-| `TaskStatusUpdateEvent`                                      | Not implemented | Atlas emits its own`task.state` event, not the A2A shape.                                                   | Spec-shaped status events external clients understand without bespoke mapping.                                      |
-| `TaskArtifactUpdateEvent`                                    | Not implemented | No artifact-update streaming event.                                                                           | Streaming partial/incremental artifacts (chunked outputs) to clients as they are produced.                          |
-| Ordered-event / final-flag guarantee                           | Not implemented | No A2A ordering contract (v1.0.0 closes a stream on terminal state).                                          | Reliable, in-order delivery with terminal-close semantics — the correctness guarantee streaming clients depend on. |
+| Send Streaming Message (`SendStreamingMessage` / `message/stream`) | Not implemented | The *initial-send* streaming method — Atlas streams an **existing** task via `SubscribeToTask` (now implemented), but a brand-new send does not stream. | A client streaming a task from its very first message, not only re-attaching to one already running. |
+
+> Now implemented (moved to [Implemented](./a2a-implemented.md) §5): `SubscribeToTask` (per-task streaming that honours `capabilities.streaming`), the `StreamResponse` wrapper, `TaskStatusUpdateEvent`, `TaskArtifactUpdateEvent`, and the ordered-event / final-flag (terminal-close) guarantee.
 
 ## 6. Push notifications (webhooks)
 
@@ -78,15 +70,15 @@ this section remains absent.
 
 ## 8. Extensions mechanism
 
-| Feature                              | Status          | What's missing                                                                    | What it would unlock if built                                                                                                             |
-| ------------------------------------ | --------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Extension negotiation / opt-in       | Not implemented | No request-time negotiation (in-process, the router always knows the extensions). | Clients opting into specific extensions per request (via`A2A-Extensions`), so an agent tailors behaviour to what the client supports.   |
-| Required-extension enforcement error | Not implemented | `AgentExtension.required` exists (default false) but is never enforced.         | Returning`ExtensionSupportRequiredError` when a client lacks a required extension — making `required: true` actually mean something. |
+Both extension items are now **implemented** (moved to [Implemented](./a2a-implemented.md) §8): request-time
+extension negotiation via the `A2A-Extensions` header (activated extensions echoed back), and required-extension
+enforcement (`ExtensionSupportRequiredError` when a client lacks the required need-to-know extension). Nothing in
+this section remains absent.
 
 ## 9. Error handling
 
 | Feature                   | Status          | What's missing                                                                                | What it would unlock if built                                                                                                                  |
 | ------------------------- | --------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| A2A standard error types  | Not implemented | None of the nine named errors (`TaskNotFoundError` … `VersionNotSupportedError`) exist.  | Programmatic error handling — clients branching on`TaskNotFound` vs `UnsupportedOperation`, etc.                                          |
-| Version-negotiation error | Not implemented | No protocol-version handling.                                                                 | Rejecting an unsupported version cleanly (`VersionNotSupportedError`, `-32009`) instead of failing opaquely.                               |
 | JSON-RPC error codes      | By design       | No JSON-RPC envelope, so no JSON-RPC error objects; in-process calls raise Python exceptions. | JSON-RPC`-32xxx` error objects — only relevant if a JSON-RPC binding is added; raising Python exceptions in-process is the intended design. |
+
+> Now implemented (moved to [Implemented](./a2a-implemented.md) §9): the **named A2A error types** (JSON-RPC codes, mapped to an HTTP status + a spec-shaped error body) and the **version-negotiation error** (`VersionNotSupportedError`).

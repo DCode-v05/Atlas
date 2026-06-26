@@ -22,21 +22,20 @@ from atlas.a2a.models import AgentCard, AgentExtension, AgentInterface, AgentSki
 
 
 def _public_extensions(card: AgentCard) -> list[AgentExtension]:
-    """Declare the extension URIs the agent supports, but drop the org-profile
-    *metadata* (internal hierarchy/clearance) — that is extended-only."""
-    out: list[AgentExtension] = []
-    for ext in card.extensions:
-        if ext.uri == ORG_PROFILE_EXT:
-            continue
-        out.append(AgentExtension(uri=ext.uri, version=ext.version, required=ext.required, metadata={}))
-    return out
+    """The extension declarations a PUBLIC client may see — need-to-know + coordination, but NOT
+    the org-profile (internal hierarchy / clearance), which is extended-card-only."""
+    return [
+        AgentExtension(uri=ext.uri, description=ext.description, required=ext.required, version=ext.version)
+        for ext in card.capabilities.extensions
+        if ext.uri != ORG_PROFILE_EXT
+    ]
 
 
 def public_agent_card(card: AgentCard) -> dict:
     """The Agent Card an UNAUTHENTICATED client sees — identity, skills,
     capabilities, security, transport — but NOT the internal org profile."""
     pub = card.model_copy(deep=True)
-    pub.extensions = _public_extensions(card)
+    pub.capabilities.extensions = _public_extensions(card)
     return pub.model_dump(mode="json")
 
 
@@ -53,9 +52,10 @@ def service_agent_card(snapshot) -> dict:
     It represents the gateway in front of the 100 agents and carries the same
     security schemes + capabilities, plus a pointer to the agent catalog."""
     base = snapshot.agents[snapshot.ceo_id].card
-    # capabilities.extensions are uri-only declarations (need-to-know / coordination),
-    # already public-safe — keep them so the service advertises the extension mechanism.
+    # The well-known service card is PUBLIC: advertise the extension mechanism (need-to-know /
+    # coordination) but strip the org-profile so the CEO's hierarchy/clearance never leaks.
     caps = base.capabilities.model_copy(deep=True)
+    caps.extensions = _public_extensions(base)
     card = AgentCard(
         id="atlas",
         name="Atlas",

@@ -241,17 +241,28 @@ def generate_org(seed: int) -> OrgSnapshot:
             provider=AgentProvider(organization=ORG_NAME, url="https://atlas.dev"),
             url=f"https://atlas.dev/.well-known/agents/{ag.id}/agent-card.json",
             preferredTransport="in-process",
+            iconUrl="https://atlas.dev/icon.svg",
+            documentationUrl="https://atlas.dev/docs/a2a",
+            defaultInputModes=["text/plain"],
+            defaultOutputModes=["text/plain"],
             skills=skills,
             interfaces=[AgentInterface(transport="in-process", url=f"atlas://agent/{ag.id}")],
             capabilities=AgentCapabilities(
                 streaming=True,
                 pushNotifications=True,  # backed by the webhook delivery subsystem (atlas/push)
                 extendedAgentCard=True,  # a richer card is available to authenticated callers
-                extensions=[AgentExtension(uri=NEED_TO_KNOW_EXT), AgentExtension(uri=COORDINATION_EXT)],
+                # All three extensions live under capabilities.extensions (spec-valid). need-to-know
+                # is REQUIRED — a client that can't carry intent can't participate meaningfully.
+                extensions=[
+                    AgentExtension(uri=NEED_TO_KNOW_EXT, required=True,
+                                   description="Sensitivity + scope on context, and the requester's intent on messages."),
+                    AgentExtension(uri=COORDINATION_EXT,
+                                   description="Group-session and human-in-the-loop signalling."),
+                    profile_to_extension(ag.profile),
+                ],
             ),
             securitySchemes=dict(SECURITY_SCHEMES),
             securityRequirements=[dict(r) for r in SECURITY_REQUIREMENTS],
-            extensions=[profile_to_extension(ag.profile)],
         )
 
     # ── Pass 3: secrets (deterministic) ────────────────────────────────────
